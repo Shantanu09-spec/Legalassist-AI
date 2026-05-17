@@ -135,9 +135,14 @@ def generate_report(
     file_name = _safe_filename(f"{case_id}_{report_type}_{report_id}{ext}")
     file_path = out_dir / file_name
 
-    # Phase 1 only: generate branded PDF.
-    if (format or "pdf").lower() != "pdf":
-        raise ValueError(f"Phase 1 only supports pdf; got {format}")
+    # Supported formats: pdf (Phase 1), csv/html/docx (planned)
+    supported_formats = {"pdf"}
+    if format and format.lower() not in supported_formats:
+        raise ValueError(
+            f"Unsupported report format '{format}'. "
+            f"Currently supported: {', '.join(supported_formats)}. "
+            "Additional formats (csv, html, docx) coming in Phase 2."
+        )
 
     pdf_bytes = generate_case_pdf(user_id=int(user_id), case_id=int(case_id))
     if not pdf_bytes:
