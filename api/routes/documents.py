@@ -4,6 +4,7 @@ POST /api/v1/analyze/document - Analyze document asynchronously
 GET /api/v1/analyze/{job_id} - Check analysis job status
 """
 import uuid
+from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends
 from fastapi import Request
 from api.models import DocumentAnalysisRequest, DocumentAnalysisSummary, AnalysisJobResponse
@@ -81,7 +82,7 @@ async def analyze_document(
     return AnalysisJobResponse(
         job_id=task.id,
         status="pending",
-        created_at=__import__('datetime').datetime.utcnow()
+        created_at=datetime.utcnow()
     )
 
 
@@ -101,7 +102,7 @@ async def get_analysis_status(
     return AnalysisJobResponse(
         job_id=job_id,
         status=status_info["status"],
-        created_at=__import__('datetime').datetime.utcnow(),
+        created_at=datetime.utcnow(),
         result_url=f"/api/v1/analyze/{job_id}/result" if status_info["status"] == "completed" else None
     )
 
@@ -235,7 +236,7 @@ async def upload_document_file(
         return AnalysisJobResponse(
             job_id=task.id,
             status="pending",
-            created_at=__import__('datetime').datetime.utcnow()
+            created_at=datetime.utcnow()
         )
     
     except Exception as e:
