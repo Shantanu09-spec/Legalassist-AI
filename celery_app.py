@@ -231,6 +231,11 @@ celery_app.conf.update(
             "schedule": 86400.0,
             "options": {"queue": "maintenance"},
         },
+        "cleanup-revoked-tokens": {
+            "task": "cleanup_revoked_tokens",
+            "schedule": 21600.0,
+            "options": {"queue": "maintenance"},
+        },
     },
 )
 
@@ -1090,3 +1095,24 @@ def send_deadline_reminders() -> Dict[str, int]:
     # 3. Trigger send_notification_task for each user
 
     return {"status": "completed", "reminders_sent": 0}
+
+
+@celery_app.task(name="cleanup_revoked_tokens", bind=True, max_retries=3)
+def cleanup_revoked_tokens(self) -> Dict[str, Any]:
+    """
+    Periodic task to clean up expired revoked tokens from the database.
+    Prevents unbounded blacklist growth in distributed deployments.
+    """
+    from database import SessionLocal, cleanup_expired_revoked_tokens
+
+    logger.info("Executing periodic maintenance: cleanup_revoked_tokens")
+    db = SessionLocal()
+    try:
+        deleted = cleanup_expired_revoked_tokens(db)
+        logger.info("cleanup_revoked_tokens_completed", deleted_count=deleted)
+        return {"status": "completed", "deleted_count": deleted}
+    except Exception as exc:
+        logger.error("cleanup_revoked_tokens_failed", error=str(exc))
+        raise self.retry(exc=exc, countdown=60)
+    finally:
+        db.close()
