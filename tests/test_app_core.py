@@ -8,6 +8,7 @@ import io
 import os
 from unittest.mock import MagicMock, patch
 from pypdf import PdfWriter
+from core.exceptions import PDFProcessingError
 from core.app_utils import (
     extract_text_from_pdf,
     compress_text,
@@ -90,6 +91,13 @@ class TestPDFExtraction:
         
         with pytest.raises(ValueError, match="No extractable text found"):
             extract_text_from_pdf(pdf_file)
+
+    def test_corrupted_pdf_raises_processing_error(self):
+        """Test that malformed PDFs surface a typed processing error."""
+        bad_pdf = io.BytesIO(b"not a valid pdf")
+
+        with pytest.raises(PDFProcessingError, match="Failed to extract text from PDF"):
+            extract_text_from_pdf(bad_pdf)
 
 
 # ==================== TEXT COMPRESSION TESTS ====================
