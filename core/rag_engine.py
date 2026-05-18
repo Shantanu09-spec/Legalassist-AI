@@ -56,6 +56,8 @@ class LegalRAG:
         """Split judgment text on section-like headers before falling back to size-based chunking."""
         chunks: List[str] = []
         current_section_lines: List[str] = []
+        max_chunk_size = 1800
+        max_hard_slice_size = 2000
 
         for line in text.splitlines():
             if self._is_section_header(line) and current_section_lines:
@@ -77,10 +79,18 @@ class LegalRAG:
 
         semantic_chunks: List[str] = []
         for chunk in chunks:
-            if len(chunk) <= 1800:
+            if len(chunk) <= max_chunk_size:
                 semantic_chunks.append(chunk)
             else:
-                semantic_chunks.extend(self.text_splitter.split_text(chunk))
+                split_result = self.text_splitter.split_text(chunk)
+                for sub_chunk in split_result:
+                    if len(sub_chunk) <= max_chunk_size:
+                        semantic_chunks.append(sub_chunk)
+                    else:
+                        for i in range(0, len(sub_chunk), max_hard_slice_size):
+                            hard_slice = sub_chunk[i:i + max_hard_slice_size]
+                            if hard_slice.strip():
+                                semantic_chunks.append(hard_slice)
 
         return [chunk for chunk in semantic_chunks if chunk.strip()]
 

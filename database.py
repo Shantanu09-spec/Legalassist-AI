@@ -86,12 +86,10 @@ from db.otp_service import (
     create_otp_verification,
     create_user,
     get_pending_otp,
-    "record_otp_failed_attempt",
+    record_otp_failed_attempt,
     get_user_by_email,
     is_token_revoked,
     mark_otp_as_used,
-    record_otp_failed_attempt,
-    "reset_otp_failed_attempts",
     revoke_token,
     reset_otp_failed_attempts,
     update_user_last_login,
@@ -223,6 +221,7 @@ return current
 """
 _otp_rate_limit_client = None
 _otp_rate_limit_script = None
+_otp_rate_limit_lock = threading.Lock()
 
 
 def _otp_rate_limit_key(identifier: str) -> str:
@@ -234,13 +233,17 @@ def _otp_rate_limit_key(identifier: str) -> str:
 def _get_otp_rate_limit_script():
     global _otp_rate_limit_client, _otp_rate_limit_script
 
-    if _otp_rate_limit_script is None:
-        if redis is None:
-            raise RuntimeError("Redis is required for OTP rate limiting but is not installed.")
+    if _otp_rate_limit_script is not None:
+        return _otp_rate_limit_script
 
-        redis_url = getattr(Config, "REDIS_URL", "redis://localhost:6379/0")
-        _otp_rate_limit_client = redis.from_url(redis_url, decode_responses=True)
-        _otp_rate_limit_script = _otp_rate_limit_client.register_script(_OTP_RATE_LIMIT_SCRIPT)
+    with _otp_rate_limit_lock:
+        if _otp_rate_limit_script is None:
+            if redis is None:
+                raise RuntimeError("Redis is required for OTP rate limiting but is not installed.")
+
+            redis_url = getattr(Config, "REDIS_URL", "redis://localhost:6379/0")
+            _otp_rate_limit_client = redis.from_url(redis_url, decode_responses=True)
+            _otp_rate_limit_script = _otp_rate_limit_client.register_script(_OTP_RATE_LIMIT_SCRIPT)
 
     return _otp_rate_limit_script
 
@@ -403,11 +406,32 @@ def is_token_revoked(db: Session, jti: str) -> bool:
     return db.query(RevokedToken).filter(RevokedToken.jti == jti).first() is not None
 
 
-def cleanup_expired_revoked_tokens(db: Session) -> int:
+def cleanup_expired_revoked_tokens(db: Session, batch_size: int = 1000) -> int:
+    """Delete expired revoked tokens in batches to avoid lock contention."""
     now = dt.datetime.now(dt.timezone.utc)
-    deleted = db.query(RevokedToken).filter(RevokedToken.expires_at < now).delete()
-    db.commit()
-    return deleted
+    total_deleted = 0
+
+    while True:
+        deleted = db.query(RevokedToken).filter(
+            RevokedToken.expires_at < now
+        ).limit(batch_size).delete(synchronize_session=False)
+        db.commit()
+        total_deleted += deleted
+        if deleted < batch_size:
+            break
+
+    return total_deleted
+
+
+def schedule_token_cleanup():
+    """Standalone cleanup runner for cron/celery scheduling."""
+    from database import SessionLocal, cleanup_expired_revoked_tokens
+    db = SessionLocal()
+    try:
+        deleted = cleanup_expired_revoked_tokens(db)
+        return deleted
+    finally:
+        db.close()
 
 
 def create_case(db: Session, user_id: int, case_number: str, case_type: str, jurisdiction: str, title: Optional[str] = None) -> Case:

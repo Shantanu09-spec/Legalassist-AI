@@ -43,6 +43,12 @@ from .timezone_utils import (
     get_timezone_offset,
     render_timezone_selector,
 )
+from .api_client import (
+    APIResponse,
+    call_with_fallback,
+    ResilientClient,
+    with_timeout_fallback,
+)
 
 __all__ = [
     'extract_text_from_pdf',
@@ -86,4 +92,8 @@ __all__ = [
     'get_user_timezone',
     'get_timezone_offset',
     'render_timezone_selector',
+    'APIResponse',
+    'call_with_fallback',
+    'ResilientClient',
+    'with_timeout_fallback',
 ]
