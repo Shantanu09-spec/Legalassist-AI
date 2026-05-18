@@ -85,18 +85,21 @@ def verify_token(token: str) -> Dict:
                     options={"require": ["exp", "iat", "iss", "aud", "jti", "type"]},
                 )
                 break
+            except jwt.ExpiredSignatureError as exc:
+                last_error = exc
+                raise TokenExpiredError("Token has expired")
+            except jwt.InvalidIssuerError as exc:
+                last_error = exc
+                raise InvalidTokenError("Invalid token issuer")
+            except jwt.InvalidAudienceError as exc:
+                last_error = exc
+                raise InvalidTokenError("Invalid token audience")
             except jwt.InvalidTokenError as exc:
                 last_error = exc
                 continue
 
         if payload is None:
-            if isinstance(last_error, jwt.ExpiredSignatureError):
-                raise last_error
-            if isinstance(last_error, jwt.InvalidIssuerError):
-                raise last_error
-            if isinstance(last_error, jwt.InvalidAudienceError):
-                raise last_error
-            raise jwt.InvalidTokenError(str(last_error) if last_error else "Invalid token")
+            raise InvalidTokenError(str(last_error) if last_error else "Invalid token")
         if payload.get("type") != "access":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
