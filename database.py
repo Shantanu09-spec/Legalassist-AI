@@ -34,6 +34,7 @@ from db.crud.notifications import (
     get_notification_history,
     get_notification_template_for_user,
     get_upcoming_deadlines,
+    get_prefs_by_user_ids,
     has_notification_been_sent,
     log_notification,
 )
@@ -126,6 +127,7 @@ __all__ = [
     "PrecedentMatch",
     "create_case_deadline",
     "get_upcoming_deadlines",
+    "get_prefs_by_user_ids",
     "get_user_deadlines",
     "has_notification_been_sent",
     "log_notification",
