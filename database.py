@@ -52,6 +52,7 @@ from db.models import (
     CaseArgument,
     KnowledgeGraphEdge,
     PrecedentMatch,
+    Report,
 )
 from db.crud.notifications import (
     create_case_deadline,
@@ -98,6 +99,7 @@ __all__ = [
     "CaseArgument",
     "KnowledgeGraphEdge",
     "PrecedentMatch",
+    "Report",
     "create_case_deadline",
     "get_upcoming_deadlines",
     "get_user_deadlines",
