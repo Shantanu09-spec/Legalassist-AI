@@ -192,9 +192,6 @@ async def logging_middleware(request: Request, call_next: Callable):
     
     clear_request_context()
     return response
-except Exception:
-    clear_request_context()
-    raise
 
 
 def _request_size_limit_for_path(path: str) -> int:
