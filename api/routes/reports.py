@@ -92,11 +92,7 @@ async def generate_report(
         status="pending",
         report_type=request.report_type,
         format=request.format,
-<<<<<<< fix/issue-579
         created_at=db_report.created_at
-=======
-        created_at=datetime.now(timezone.utc)
->>>>>>> main
     )
 
 
@@ -139,7 +135,6 @@ async def get_report_status(
             pass
     
     return ReportGenerationResponse(
-<<<<<<< fix/issue-579
         report_id=db_report.report_id,
         job_id=db_report.job_id or "unknown",
         case_id=db_report.case_id,
@@ -149,17 +144,6 @@ async def get_report_status(
         download_url=f"/api/v1/reports/{db_report.report_id}/download" if status_str == "completed" else None,
         created_at=db_report.created_at,
         completed_at=db_report.completed_at
-=======
-        report_id=report_id,
-        job_id=report_id,
-        case_id="unknown",
-        status=status_info["status"],
-        report_type="comprehensive",
-        format="pdf",
-        download_url=f"/api/v1/reports/{report_id}/download" if status_info["status"] == "completed" else None,
-        created_at=datetime.now(timezone.utc),
-        completed_at=datetime.now(timezone.utc) if status_info["status"] == "completed" else None
->>>>>>> main
     )
 
 
