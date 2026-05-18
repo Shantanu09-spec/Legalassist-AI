@@ -221,6 +221,7 @@ return current
 """
 _otp_rate_limit_client = None
 _otp_rate_limit_script = None
+_otp_rate_limit_lock = threading.Lock()
 
 
 def _otp_rate_limit_key(identifier: str) -> str:
@@ -232,13 +233,17 @@ def _otp_rate_limit_key(identifier: str) -> str:
 def _get_otp_rate_limit_script():
     global _otp_rate_limit_client, _otp_rate_limit_script
 
-    if _otp_rate_limit_script is None:
-        if redis is None:
-            raise RuntimeError("Redis is required for OTP rate limiting but is not installed.")
+    if _otp_rate_limit_script is not None:
+        return _otp_rate_limit_script
 
-        redis_url = getattr(Config, "REDIS_URL", "redis://localhost:6379/0")
-        _otp_rate_limit_client = redis.from_url(redis_url, decode_responses=True)
-        _otp_rate_limit_script = _otp_rate_limit_client.register_script(_OTP_RATE_LIMIT_SCRIPT)
+    with _otp_rate_limit_lock:
+        if _otp_rate_limit_script is None:
+            if redis is None:
+                raise RuntimeError("Redis is required for OTP rate limiting but is not installed.")
+
+            redis_url = getattr(Config, "REDIS_URL", "redis://localhost:6379/0")
+            _otp_rate_limit_client = redis.from_url(redis_url, decode_responses=True)
+            _otp_rate_limit_script = _otp_rate_limit_client.register_script(_OTP_RATE_LIMIT_SCRIPT)
 
     return _otp_rate_limit_script
 
