@@ -6,6 +6,7 @@ This file remains as a stable public API surface for legacy imports.
 
 from __future__ import annotations
 
+from db.attachments_service import create_attachment, get_attachments_for_case
 import datetime as dt
 import hashlib
 import threading
@@ -85,10 +86,10 @@ from db.otp_service import (
     create_otp_verification,
     create_user,
     get_pending_otp,
+    record_otp_failed_attempt,
     get_user_by_email,
     is_token_revoked,
     mark_otp_as_used,
-    record_otp_failed_attempt,
     revoke_token,
     reset_otp_failed_attempts,
     update_user_last_login,
@@ -220,6 +221,7 @@ return current
 """
 _otp_rate_limit_client = None
 _otp_rate_limit_script = None
+_otp_rate_limit_lock = threading.Lock()
 
 
 def _otp_rate_limit_key(identifier: str) -> str:
@@ -231,13 +233,17 @@ def _otp_rate_limit_key(identifier: str) -> str:
 def _get_otp_rate_limit_script():
     global _otp_rate_limit_client, _otp_rate_limit_script
 
-    if _otp_rate_limit_script is None:
-        if redis is None:
-            raise RuntimeError("Redis is required for OTP rate limiting but is not installed.")
+    if _otp_rate_limit_script is not None:
+        return _otp_rate_limit_script
 
-        redis_url = getattr(Config, "REDIS_URL", "redis://localhost:6379/0")
-        _otp_rate_limit_client = redis.from_url(redis_url, decode_responses=True)
-        _otp_rate_limit_script = _otp_rate_limit_client.register_script(_OTP_RATE_LIMIT_SCRIPT)
+    with _otp_rate_limit_lock:
+        if _otp_rate_limit_script is None:
+            if redis is None:
+                raise RuntimeError("Redis is required for OTP rate limiting but is not installed.")
+
+            redis_url = getattr(Config, "REDIS_URL", "redis://localhost:6379/0")
+            _otp_rate_limit_client = redis.from_url(redis_url, decode_responses=True)
+            _otp_rate_limit_script = _otp_rate_limit_client.register_script(_OTP_RATE_LIMIT_SCRIPT)
 
     return _otp_rate_limit_script
 
@@ -400,11 +406,32 @@ def is_token_revoked(db: Session, jti: str) -> bool:
     return db.query(RevokedToken).filter(RevokedToken.jti == jti).first() is not None
 
 
-def cleanup_expired_revoked_tokens(db: Session) -> int:
+def cleanup_expired_revoked_tokens(db: Session, batch_size: int = 1000) -> int:
+    """Delete expired revoked tokens in batches to avoid lock contention."""
     now = dt.datetime.now(dt.timezone.utc)
-    deleted = db.query(RevokedToken).filter(RevokedToken.expires_at < now).delete()
-    db.commit()
-    return deleted
+    total_deleted = 0
+
+    while True:
+        deleted = db.query(RevokedToken).filter(
+            RevokedToken.expires_at < now
+        ).limit(batch_size).delete(synchronize_session=False)
+        db.commit()
+        total_deleted += deleted
+        if deleted < batch_size:
+            break
+
+    return total_deleted
+
+
+def schedule_token_cleanup():
+    """Standalone cleanup runner for cron/celery scheduling."""
+    from database import SessionLocal, cleanup_expired_revoked_tokens
+    db = SessionLocal()
+    try:
+        deleted = cleanup_expired_revoked_tokens(db)
+        return deleted
+    finally:
+        db.close()
 
 
 def create_case(db: Session, user_id: int, case_number: str, case_type: str, jurisdiction: str, title: Optional[str] = None) -> Case:
@@ -758,6 +785,47 @@ def create_timeline_event(
     db.commit()
     db.refresh(event)
     return event
+
+
+def create_case_document_secure(
+    db: Session,
+    case_id: int,
+    document_type: DocumentType,
+    user_id: int,
+    document_content: Optional[str] = None,
+    file_path: Optional[str] = None,
+    summary: Optional[str] = None,
+    remedies: Optional[dict] = None,
+) -> CaseDocument:
+    """Create a new case document.
+
+    Security: enforce that `case_id` belongs to `user_id` (server-side ownership
+    validation), consistent with create_case_deadline.
+    """
+    try:
+        normalized_case_id = int(case_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("case_id must be an integer matching cases.id") from exc
+
+    # Ownership validation (prevents attaching documents to another user's case)
+    case = db.query(Case).filter(Case.id == normalized_case_id).first()
+    if not case or case.user_id != user_id:
+        raise PermissionError(
+            "case_id not found or not owned by the provided user_id"
+        )
+
+    doc = CaseDocument(
+        case_id=normalized_case_id,
+        document_type=document_type,
+        document_content=document_content,
+        file_path=file_path,
+        summary=summary,
+        remedies=remedies,
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return doc
 
 
 def get_case_documents(db: Session, case_id: int) -> List[CaseDocument]:
