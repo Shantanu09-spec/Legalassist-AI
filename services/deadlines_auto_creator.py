@@ -12,6 +12,18 @@ from db.models import CaseDeadline
 from .timeline_service import timeline_service
 
 
+_APPEAL_DAY_PATTERNS = (
+    re.compile(
+        r"\b(?P<context>file(?:\s+an?)?\s+appeal|appeal|notice(?:\s+of)?\s+appeal|challenge(?:\s+an?)?(?:\s+order)?)\b.{0,40}?\b(?P<days>\d{1,3})\s*days?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?P<days>\d{1,3})\s*days?\b.{0,40}?\b(?:to\s+)?(?P<context>file(?:\s+an?)?\s+appeal|appeal|notice(?:\s+of)?\s+appeal|challenge(?:\s+an?)?(?:\s+order)?)\b",
+        re.IGNORECASE,
+    ),
+)
+
+
 def _extract_days_from_text(text: str) -> Optional[int]:
     if not text or not isinstance(text, str):
         return None
@@ -21,13 +33,10 @@ def _extract_days_from_text(text: str) -> Optional[int]:
     if text.isdigit():
         return int(text)
 
-    primary_match = re.search(r"(\d+)\s*days?\b", text, re.IGNORECASE)
-    if primary_match:
-        return int(primary_match.group(1))
-
-    fallback_match = re.search(r"(?:in|within|after)\s+(\d+)\s*days?", text, re.IGNORECASE)
-    if fallback_match:
-        return int(fallback_match.group(1))
+    for pattern in _APPEAL_DAY_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return int(match.group("days"))
 
     return None
 
