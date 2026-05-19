@@ -49,7 +49,7 @@ class CaseDeadline(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), onupdate=lambda: dt.datetime.now(dt.timezone.utc))
     is_completed = Column(Boolean, default=False, index=True)
 
-    case = relationship("Case", back_populates="deadlines")
+    case = relationship("Case", back_populates="deadlines", cascade="all, delete-orphan")
     notifications = relationship("NotificationLog", back_populates="deadline", cascade="all, delete-orphan")
     attachments = relationship("Attachment", back_populates="deadline", cascade="all, delete-orphan")
 
@@ -97,7 +97,7 @@ class CaseDocument(Base):
     summary = Column(Text, nullable=True)
     remedies = Column(JSON, nullable=True)
 
-    case = relationship("Case", back_populates="documents")
+    case = relationship("Case", back_populates="documents", cascade="all, delete-orphan")
 
 
 class Attachment(Base):
@@ -113,8 +113,8 @@ class Attachment(Base):
     size_bytes = Column(Integer, nullable=True)
     uploaded_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), nullable=False)
 
-    case = relationship("Case", back_populates="attachments")
-    deadline = relationship("CaseDeadline", back_populates="attachments")
+    case = relationship("Case", back_populates="attachments", cascade="all, delete-orphan")
+    deadline = relationship("CaseDeadline", back_populates="attachments", cascade="all, delete-orphan")
 
 
 class CaseTimeline(Base):
@@ -128,4 +128,4 @@ class CaseTimeline(Base):
     event_metadata = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), nullable=False)
 
-    case = relationship("Case", back_populates="timeline_events")
+    case = relationship("Case", back_populates="timeline_events", cascade="all, delete-orphan")
