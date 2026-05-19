@@ -63,7 +63,7 @@ initialize_observability_for_environment()
 st.set_page_config(
     page_title=Config.APP_NAME,
     page_icon="⚖",
-    layout="wide" if st.query_params.get("page") == "deadlines" else "centered"
+    layout="wide"
 )
 
 # Using default Streamlit theme
