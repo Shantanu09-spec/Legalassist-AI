@@ -48,19 +48,25 @@ def _get_jwt_secrets_to_try() -> list[str]:
 def create_access_token(data: Dict, expires_delta: Optional[timedelta] = None) -> str:
     """Create JWT access token"""
     to_encode = data.copy()
+
+    if "sub" not in to_encode and "user_id" in to_encode:
+        to_encode["sub"] = str(to_encode.pop("user_id"))
+    elif "sub" not in to_encode:
+        raise ValueError("Token data must include 'sub' or 'user_id' claim")
+
     to_encode.setdefault("jti", str(uuid.uuid4()))
     to_encode.setdefault("iat", datetime.now(timezone.utc))
     to_encode.setdefault("iss", settings.JWT_ISSUER)
     to_encode.setdefault("aud", settings.JWT_AUDIENCE)
     to_encode.setdefault("type", "access")
-    
+
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(hours=settings.JWT_EXPIRATION_HOURS)
-    
+
     to_encode.update({"exp": expire})
-    
+
     encoded_jwt = jwt.encode(
         to_encode,
         settings.JWT_SECRET_KEY,
