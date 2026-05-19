@@ -6,13 +6,12 @@ from services.deadlines_auto_creator import _extract_days_from_text, _validate_d
 @pytest.mark.parametrize(
     "text, expected",
     [
-        ("30 days", 30),
         ("appeal within 15 days", 15),
         ("file appeal in 7 days", 7),
-        ("30days", 30),
-        ("30 Days", 30),
+        ("notice of appeal within 30 days", 30),
+        ("30 days to file appeal", 30),
+        ("challenge within 21 days", 21),
         ("Cost is 500 Rs, appeal in 30 days", 30),
-        ("within 21 days of service", 21),
     ],
 )
 def test_extract_days_from_text_variants(text, expected):
@@ -21,7 +20,18 @@ def test_extract_days_from_text_variants(text, expected):
 
 @pytest.mark.parametrize(
     "text",
-    ["", None, "Invalid text", "appeal by tomorrow"],
+    [
+        "",
+        None,
+        "Invalid text",
+        "appeal by tomorrow",
+        "30 days",
+        "30days",
+        "30 Days",
+        "within 21 days of service",
+        "payment due in 30 days",
+        "file payment in 30 days",
+    ],
 )
 def test_extract_days_from_text_invalid_inputs(text):
     assert _extract_days_from_text(text) is None
