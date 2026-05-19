@@ -6,7 +6,7 @@ GET /api/v1/cases/{id}/timeline - Get case timeline
 """
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request
 from sqlalchemy.orm import Session
 from api.models import (
     CaseSearchRequest, CaseSearchResponse, CaseResult,
@@ -18,6 +18,7 @@ from api.models import (
     CaseNoteVersionItem,
 )
 from api.auth import get_current_user, CurrentUser
+from api.validation import validate_file_upload, validate_file_upload_streaming, ValidationConfig
 import structlog
 from sqlalchemy import func
 
@@ -27,10 +28,15 @@ from database import (
     get_db,
     submit_similarity_feedback,
     Case,
+    DocumentType,
+    CaseDocument,
+    Attachment,
     save_case_note_draft,
     publish_case_note,
     get_case_note_history,
 )
+from case_manager import upload_case_document_file
+from celery_app import enqueue_task_from_http_request, process_case_document_upload_task
 from analytics_engine import CaseSimilarityCalculator
 
 router = APIRouter(prefix="/api/v1/cases", tags=["cases"])
@@ -384,6 +390,84 @@ async def get_case_details(
         "jurisdiction": case.jurisdiction,
         "status": case.status.value if hasattr(case.status, 'value') else str(case.status),
         "summary": latest_doc.summary if latest_doc else ""
+    }
+
+
+@router.post(
+    "/{case_id}/documents/upload",
+    summary="Upload a PDF or image document to a case",
+)
+async def upload_case_document_endpoint(
+    case_id: str,
+    http_request: Request,
+    file: UploadFile = File(...),
+    document_type: str = Form(default="Other"),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Store an upload, create linked attachment/document rows, and queue OCR extraction."""
+    try:
+        case_id_int = int(case_id)
+        user_id_int = int(current_user.user_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ID format")
+
+    case = db.query(Case).filter(Case.id == case_id_int).first()
+    if not case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
+    if case.user_id != user_id_int:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: You do not own this case")
+
+    allowed_extensions = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
+    allowed_mime_types = {
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "image/tiff",
+        "image/bmp",
+        "image/webp",
+    }
+
+    validate_file_upload(
+        file,
+        max_size=ValidationConfig.MAX_UPLOAD_SIZE,
+        allowed_extensions=allowed_extensions,
+        allowed_mime_types=allowed_mime_types,
+    )
+    await validate_file_upload_streaming(file, max_size=ValidationConfig.MAX_UPLOAD_SIZE)
+    file_bytes = await file.read()
+
+    stored = upload_case_document_file(
+        user_id=user_id_int,
+        case_id=case_id_int,
+        file_bytes=file_bytes,
+        filename=file.filename,
+        document_type=getattr(DocumentType, document_type.upper(), DocumentType.OTHER),
+        content_type=file.content_type,
+    )
+    if not stored:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to store uploaded file")
+
+    task = enqueue_task_from_http_request(
+        process_case_document_upload_task,
+        http_request,
+        context_user_id=current_user.user_id,
+        user_id=str(current_user.user_id),
+        case_id=str(case_id_int),
+        attachment_id=str(stored["attachment"]["id"]),
+        document_id=str(stored["document"]["id"]),
+        original_filename=file.filename,
+    )
+
+    return {
+        "status": "queued",
+        "task_id": task.id,
+        "case_id": case_id_int,
+        "attachment_id": stored["attachment"]["id"],
+        "document_id": stored["document"]["id"],
+        "document_type": stored["document"]["document_type"],
+        "filename": file.filename,
     }
 
 

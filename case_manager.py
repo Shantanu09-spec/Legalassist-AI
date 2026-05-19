@@ -324,6 +324,92 @@ def upload_case_attachment(
         db.close()
 
 
+def upload_case_document_file(
+    user_id: int,
+    case_id: int,
+    file_bytes: bytes,
+    filename: str,
+    document_type: DocumentType = DocumentType.OTHER,
+    content_type: Optional[str] = None,
+) -> Optional[dict]:
+    """Persist an uploaded case document and create its attachment link."""
+    from core.storage import save_attachment
+
+    db = SessionLocal()
+    try:
+        case = get_case_by_id(db, case_id)
+        if not case or case.user_id != user_id:
+            logger.error(f"Case {case_id} not found or not owned by user {user_id}")
+            return None
+
+        stored_path, size = save_attachment(file_bytes, filename)
+
+        att = create_attachment(
+            db=db,
+            user_id=user_id,
+            original_filename=filename,
+            stored_path=stored_path,
+            content_type=content_type,
+            size_bytes=size,
+            case_id=case_id,
+        )
+
+        doc = create_case_document(
+            db=db,
+            case_id=case_id,
+            document_type=document_type,
+            user_id=user_id,
+            file_path=stored_path,
+            source_attachment_id=att.id,
+            extraction_method="queued",
+            ocr_used=False,
+            extracted_metadata={"status": "queued"},
+        )
+
+        att.document_id = doc.id
+        db.commit()
+
+        _timeline_service.create_event(
+            db=db,
+            case_id=case_id,
+            event_type="document_uploaded",
+            description=f"{document_type.value} document uploaded",
+            metadata={"attachment_id": att.id, "document_id": doc.id},
+        )
+
+        db.refresh(att)
+        db.refresh(doc)
+        return {
+            "attachment": {
+                "id": att.id,
+                "original_filename": att.original_filename,
+                "stored_path": att.stored_path,
+                "size_bytes": att.size_bytes,
+                "uploaded_at": att.uploaded_at.isoformat(),
+                "content_type": att.content_type,
+                "case_id": att.case_id,
+                "document_id": getattr(att, "document_id", None),
+            },
+            "document": {
+                "id": doc.id,
+                "case_id": doc.case_id,
+                "document_type": doc.document_type.value,
+                "uploaded_at": doc.uploaded_at.isoformat(),
+                "file_path": doc.file_path,
+                "source_attachment_id": doc.source_attachment_id,
+                "extraction_method": doc.extraction_method,
+                "ocr_used": doc.ocr_used,
+                "extracted_metadata": doc.extracted_metadata,
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"Error uploading case document file: {str(e)}", exc_info=True)
+        return None
+    finally:
+        db.close()
+
+
 def _extract_days_from_text(text: str) -> Optional[int]:
     return _extract_days_from_text_service(text)
 

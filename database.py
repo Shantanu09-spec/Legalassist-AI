@@ -81,6 +81,9 @@ from db.models import (
     OTPVerification,
     PrecedentMatch,
     Report,
+    UserPreference,
+    UserFeedback,
+    SimilarityFeedback,
 )
 from db.notifications_service import create_or_update_user_preference, get_user_deadlines
 from db.otp_service import (

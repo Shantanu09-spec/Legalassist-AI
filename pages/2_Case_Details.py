@@ -150,6 +150,7 @@ def render_documents_section(case_id: int, documents: list, user_id: int):
     if documents:
         for doc in documents:
             doc_date = datetime.fromisoformat(doc["uploaded_at"]).strftime("%d %b %Y")
+            metadata = doc.get("extracted_metadata") or {}
 
             with st.container(border=True):
                 col1, col2 = st.columns([3, 1])
@@ -157,6 +158,8 @@ def render_documents_section(case_id: int, documents: list, user_id: int):
                 with col1:
                     st.markdown(f"### {doc['document_type']}")
                     st.caption(f"Uploaded: {doc_date}")
+                    if doc.get("source_attachment_id"):
+                        st.caption(f"Linked attachment: #{doc['source_attachment_id']}")
 
                     if doc.get("summary"):
                         with st.expander("📝 View Summary"):
@@ -164,6 +167,22 @@ def render_documents_section(case_id: int, documents: list, user_id: int):
 
                     if doc.get("has_remedies"):
                         st.success("✅ Legal remedies extracted")
+
+                    if metadata:
+                        with st.expander("🔎 Extracted Fields"):
+                            if metadata.get("parties"):
+                                st.markdown("**Parties**")
+                                st.write(", ".join(metadata["parties"]))
+                            if metadata.get("dates"):
+                                st.markdown("**Dates**")
+                                st.write(", ".join(metadata["dates"]))
+                            if metadata.get("claims"):
+                                st.markdown("**Claims**")
+                                st.write("\n".join(f"- {item}" for item in metadata["claims"]))
+                            if metadata.get("statutes"):
+                                st.markdown("**Statutes**")
+                                st.write(", ".join(metadata["statutes"]))
+                            st.caption(f"Extraction method: {doc.get('extraction_method') or 'n/a'} · OCR used: {bool(doc.get('ocr_used'))}")
 
                 with col2:
                     if st.button("📄 View Full", key=f"doc_{doc['id']}"):
@@ -250,6 +269,8 @@ def render_documents_section(case_id: int, documents: list, user_id: int):
                 with col1:
                     st.markdown(f"**{a['original_filename']}**")
                     st.caption(f"Uploaded: {a['uploaded_at']} • {a.get('size_bytes', 0)} bytes")
+                    if a.get("document_id"):
+                        st.caption(f"Linked document: #{a['document_id']}")
                 with col2:
                     try:
                         from core.storage import get_attachment_path

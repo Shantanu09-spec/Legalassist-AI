@@ -82,15 +82,23 @@ def create_case_document(
     file_path: Optional[str] = None,
     summary: Optional[str] = None,
     remedies: Optional[dict] = None,
+    extracted_metadata: Optional[dict] = None,
+    extraction_method: Optional[str] = None,
+    ocr_used: bool = False,
+    source_attachment_id: Optional[int] = None,
 ) -> CaseDocument:
     """Create a new case document"""
     doc = CaseDocument(
         case_id=case_id,
+        source_attachment_id=source_attachment_id,
         document_type=document_type,
         document_content=document_content,
         file_path=file_path,
         summary=summary,
         remedies=remedies,
+        extracted_metadata=extracted_metadata,
+        extraction_method=extraction_method,
+        ocr_used=ocr_used,
     )
     db.add(doc)
     db.commit()
@@ -221,6 +229,9 @@ def update_case_document(
     document_content: Optional[str] = None,
     summary: Optional[str] = None,
     remedies: Optional[dict] = None,
+    extracted_metadata: Optional[dict] = None,
+    extraction_method: Optional[str] = None,
+    ocr_used: Optional[bool] = None,
 ) -> Optional[CaseDocument]:
     """Update case document"""
     doc = db.query(CaseDocument).filter(CaseDocument.id == document_id).first()
@@ -231,6 +242,12 @@ def update_case_document(
             doc.summary = summary
         if remedies is not None:
             doc.remedies = remedies
+        if extracted_metadata is not None:
+            doc.extracted_metadata = extracted_metadata
+        if extraction_method is not None:
+            doc.extraction_method = extraction_method
+        if ocr_used is not None:
+            doc.ocr_used = ocr_used
         db.commit()
         db.refresh(doc)
     return doc

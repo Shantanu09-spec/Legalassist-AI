@@ -49,9 +49,9 @@ class CaseDeadline(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), onupdate=lambda: dt.datetime.now(dt.timezone.utc))
     is_completed = Column(Boolean, default=False, index=True)
 
-    case = relationship("Case", back_populates="deadlines", cascade="all, delete-orphan")
-    notifications = relationship("NotificationLog", back_populates="deadline", cascade="all, delete-orphan")
-    attachments = relationship("Attachment", back_populates="deadline", cascade="all, delete-orphan")
+    case = relationship("Case", back_populates="deadlines")
+    notifications = relationship("NotificationLog", back_populates="deadline")
+    attachments = relationship("Attachment", back_populates="deadline")
 
     def days_until_deadline(self) -> int:
         from db.session import _to_utc_datetime
@@ -91,14 +91,19 @@ class CaseDocument(Base):
 
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_attachment_id = Column(Integer, ForeignKey("attachments.id", ondelete="SET NULL"), nullable=True, index=True)
     document_type = Column(SQLEnum(DocumentType), nullable=False)
     document_content = Column(Text, nullable=True)
     file_path = Column(String(255), nullable=True)
     uploaded_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), nullable=False)
     summary = Column(Text, nullable=True)
     remedies = Column(JSON, nullable=True)
+    extracted_metadata = Column(JSON, nullable=True)
+    extraction_method = Column(String(50), nullable=True)
+    ocr_used = Column(Boolean, default=False, nullable=False)
 
-    case = relationship("Case", back_populates="documents", cascade="all, delete-orphan")
+    case = relationship("Case", back_populates="documents")
+    attachment = relationship("Attachment", foreign_keys=[source_attachment_id])
 
 
 class Attachment(Base):
@@ -108,14 +113,15 @@ class Attachment(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=True, index=True)
     deadline_id = Column(Integer, ForeignKey("case_deadlines.id", ondelete="CASCADE"), nullable=True, index=True)
+    document_id = Column(Integer, ForeignKey("case_documents.id", ondelete="SET NULL"), nullable=True, index=True)
     original_filename = Column(String(255), nullable=False)
     stored_path = Column(String(1024), nullable=False)
     content_type = Column(String(255), nullable=True)
     size_bytes = Column(Integer, nullable=True)
     uploaded_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), nullable=False)
 
-    case = relationship("Case", back_populates="attachments", cascade="all, delete-orphan")
-    deadline = relationship("CaseDeadline", back_populates="attachments", cascade="all, delete-orphan")
+    case = relationship("Case", back_populates="attachments")
+    deadline = relationship("CaseDeadline", back_populates="attachments")
 
 
 class CaseTimeline(Base):
@@ -129,7 +135,7 @@ class CaseTimeline(Base):
     event_metadata = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), nullable=False)
 
-    case = relationship("Case", back_populates="timeline_events", cascade="all, delete-orphan")
+    case = relationship("Case", back_populates="timeline_events")
 
 
 class CaseNote(Base):
