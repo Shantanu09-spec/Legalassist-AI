@@ -96,6 +96,8 @@ from db.models import (
     OTPVerification,
     PrecedentMatch,
     Report,
+    User,
+    RevokedToken,
     UserPreference,
     UserFeedback,
     SimilarityFeedback,
@@ -301,10 +303,14 @@ def _reserve_otp_rate_limit_slot(identifier: str, max_requests_per_hour: int, la
 def _safe_reserve_otp_slot(identifier: str, max_requests_per_hour: int, label: str = "identifier") -> int:
     try:
         return _reserve_otp_rate_limit_slot(identifier, max_requests_per_hour, label=label)
-    except TypeError:
+    except TypeError as exc:
+        if exc.__traceback__.tb_next is not None:
+            raise exc
         try:
             return _reserve_otp_rate_limit_slot(identifier, max_requests_per_hour, label)
-        except TypeError:
+        except TypeError as exc_inner:
+            if exc_inner.__traceback__.tb_next is not None:
+                raise exc_inner
             return _reserve_otp_rate_limit_slot(identifier, max_requests_per_hour)
 
 
@@ -800,45 +806,8 @@ def create_timeline_event(
     return event
 
 
-def create_case_document_secure(
-    db: Session,
-    case_id: int,
-    document_type: DocumentType,
-    user_id: int,
-    document_content: Optional[str] = None,
-    file_path: Optional[str] = None,
-    summary: Optional[str] = None,
-    remedies: Optional[dict] = None,
-) -> CaseDocument:
-    """Create a new case document.
-
-    Security: enforce that `case_id` belongs to `user_id` (server-side ownership
-    validation), consistent with create_case_deadline.
-    """
-    try:
-        normalized_case_id = int(case_id)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("case_id must be an integer matching cases.id") from exc
-
-    # Ownership validation (prevents attaching documents to another user's case)
-    case = db.query(Case).filter(Case.id == normalized_case_id).first()
-    if not case or case.user_id != user_id:
-        raise PermissionError(
-            "case_id not found or not owned by the provided user_id"
-        )
-
-    doc = CaseDocument(
-        case_id=normalized_case_id,
-        document_type=document_type,
-        document_content=document_content,
-        file_path=file_path,
-        summary=summary,
-        remedies=remedies,
-    )
-    db.add(doc)
-    db.commit()
-    db.refresh(doc)
-    return doc
+# create_case_document_secure is deprecated - use create_case_document which already has ownership validation
+create_case_document_secure = create_case_document
 
 
 def get_case_documents(db: Session, case_id: int) -> List[CaseDocument]:

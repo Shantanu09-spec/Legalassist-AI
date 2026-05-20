@@ -142,7 +142,7 @@ def send_otp_email(email: str, otp: str) -> bool:
         if not api_key or sendgrid is None:
             if _is_debug_or_testing_mode():
                 logger.warning("SendGrid API key not configured or sendgrid package not installed - using masked OTP logging for debug/test mode")
-                logger.debug(f"OTP for {email}: [MASKED-{otp[:2]}***{otp[-1]}]")
+                logger.debug(f"OTP for {email}: [MASKED]")
                 return True  # Simulate success only in explicit debug/testing environments
             logger.error(
                 f"SendGrid API key not configured or sendgrid package not installed — OTP delivery failed for {email}. "
@@ -184,9 +184,8 @@ def send_otp_email(email: str, otp: str) -> bool:
 
     except Exception as e:
         logger.error(f"Failed to send OTP email to {email}: {str(e)}")
-        # Fallback: masked OTP logging only in debug mode
         if _is_debug_or_testing_mode():
-            logger.debug(f"OTP for {email}: [MASKED-{otp[:2]}***{otp[-1]}]")
+            logger.debug(f"OTP for {email}: [MASKED]")
         else:
             logger.warning(f"OTP delivery failed for {email} (check email service config)")
         return False
