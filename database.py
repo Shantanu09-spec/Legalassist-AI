@@ -54,6 +54,12 @@ from db.crud.notifications import (
     has_notification_been_sent,
     log_notification,
 )
+from db.crud.knowledge import (
+    record_knowledge_invalidation,
+    list_knowledge_invalidations,
+    get_knowledge_freshness_summary,
+    process_due_knowledge_invalidations,
+)
 from db.models import (
     Attachment,
     Case,
@@ -71,6 +77,8 @@ from db.models import (
     CaseNoteVersion,
     DocumentType,
     KnowledgeGraphEdge,
+    KnowledgeInvalidation,
+    KnowledgeInvalidationStatus,
     ModelFeedback,
     ModelPerformance,
     ModelRoutingRule,
@@ -146,6 +154,8 @@ __all__ = [
     "CaseArgument",
     "KnowledgeGraphEdge",
     "PrecedentMatch",
+    "KnowledgeInvalidation",
+    "KnowledgeInvalidationStatus",
     "Report",
     "create_case_deadline",
     "get_upcoming_deadlines",
@@ -200,6 +210,10 @@ __all__ = [
     "submit_similarity_feedback",
     "get_similarity_feedback",
     "aggregate_model_performance",
+    "record_knowledge_invalidation",
+    "list_knowledge_invalidations",
+    "get_knowledge_freshness_summary",
+    "process_due_knowledge_invalidations",
 ]
 
 

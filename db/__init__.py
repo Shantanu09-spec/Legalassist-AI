@@ -22,6 +22,12 @@ from .crud.notifications import (
     log_notification,
     get_notification_history,
 )
+from .crud.knowledge import (
+    record_knowledge_invalidation,
+    list_knowledge_invalidations,
+    get_knowledge_freshness_summary,
+    process_due_knowledge_invalidations,
+)
 from .crud.feedback import submit_user_feedback, get_user_feedback
 
 __all__ = [
@@ -51,4 +57,8 @@ __all__ = [
     "get_notification_history",
     "submit_user_feedback",
     "get_user_feedback",
+    "record_knowledge_invalidation",
+    "list_knowledge_invalidations",
+    "get_knowledge_freshness_summary",
+    "process_due_knowledge_invalidations",
 ]

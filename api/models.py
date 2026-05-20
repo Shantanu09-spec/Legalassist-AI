@@ -345,6 +345,37 @@ class UpcomingDeadlinesResponse(BaseModel):
 
 
 # ============================================================================
+# Knowledge Freshness Models
+# ============================================================================
+
+class KnowledgeInvalidationItem(BaseModel):
+    id: int
+    user_id: Optional[int] = None
+    case_id: Optional[int] = None
+    document_id: Optional[int] = None
+    scope_type: str
+    scope_value: str
+    reason: str
+    details: Optional[Dict[str, Any]] = None
+    status: str
+    invalidated_at: datetime
+    scheduled_for: Optional[datetime] = None
+    recompute_started_at: Optional[datetime] = None
+    recompute_completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    recompute_attempts: int = 0
+
+
+class KnowledgeInvalidationListResponse(BaseModel):
+    items: List[KnowledgeInvalidationItem]
+    total: int
+    stale_count: int
+    fresh_count: int
+    next_recompute_at: Optional[datetime] = None
+    generated_at: datetime
+
+
+# ============================================================================
 # User Models
 # ============================================================================
 

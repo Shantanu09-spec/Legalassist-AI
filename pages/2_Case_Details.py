@@ -12,6 +12,7 @@ import routes
 from case_manager import get_case_detail, upload_case_document, mark_deadline_completed, mark_deadline_incomplete, add_manual_deadline, mark_case_appealed, mark_case_closed, mark_case_active, generate_case_summary_text
 from case_manager import upload_case_attachment, get_case_note_state, save_case_note, publish_case_note_for_case, get_case_note_history_for_case
 from core import extract_text_from_pdf
+from db.crud.knowledge import get_knowledge_freshness_summary, list_knowledge_invalidations
 from database import DocumentType, CaseStatus, SessionLocal, UserPreference
 import pytz
 import html
@@ -523,6 +524,61 @@ def render_remedies_section(remedies: Optional[Dict]):
                 st.write(span_text)
 
 
+def render_knowledge_status_section(case_id: int, user_id: int):
+    """Render the freshness dashboard for document-backed knowledge."""
+    st.subheader("📡 Knowledge Status")
+
+    db = SessionLocal()
+    try:
+        summary = get_knowledge_freshness_summary(db, user_id=user_id, case_id=case_id)
+        invalidations = list_knowledge_invalidations(db, user_id=user_id, case_id=case_id, limit=20)
+    finally:
+        db.close()
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Fresh", summary["fresh"])
+    with col2:
+        st.metric("Stale", summary["stale"])
+    with col3:
+        next_run = summary.get("next_recompute_at")
+        st.metric(
+            "Next recompute",
+            next_run.strftime("%d %b %H:%M UTC") if next_run else "queued on demand",
+        )
+
+    latest = summary.get("latest")
+    if latest:
+        st.info(f"Latest invalidation: {latest.reason} at {latest.invalidated_at.strftime('%d %b %Y %H:%M UTC')}")
+    else:
+        st.success("No invalidations recorded for this case yet.")
+
+    if not invalidations:
+        st.caption("Nothing stale right now.")
+        return
+
+    for invalidation in invalidations:
+        stale_badge = "🟠" if invalidation.status != "completed" else "🟢"
+        with st.container(border=True):
+            st.markdown(f"{stale_badge} **{invalidation.scope_type.title()}** · {invalidation.scope_value}")
+            st.caption(f"Reason: {invalidation.reason} · Status: {invalidation.status}")
+            st.caption(
+                f"Invalidated: {invalidation.invalidated_at.strftime('%d %b %Y %H:%M UTC')}"
+                + (
+                    f" · Recompute: {invalidation.scheduled_for.strftime('%d %b %Y %H:%M UTC')}"
+                    if invalidation.scheduled_for
+                    else ""
+                )
+            )
+            details = invalidation.details or {}
+            if details:
+                changed_fields = details.get("changed_fields")
+                if changed_fields:
+                    st.write(f"Changed fields: {', '.join(changed_fields)}")
+                elif details:
+                    st.json(details)
+
+
 def render_case_actions(case: Dict, user_id: int):
     """Render case status actions"""
     st.subheader("🔧 Case Actions")
@@ -621,7 +677,7 @@ def main():
     st.markdown("---")
 
     # Main content - tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📅 Timeline", "📄 Documents", "⏰ Deadlines", "⚖️ Remedies", "🗒️ Notes"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📅 Timeline", "📄 Documents", "⏰ Deadlines", "⚖️ Remedies", "📡 Knowledge", "🗒️ Notes"])
 
     with tab1:
         render_timeline_section(timeline)
@@ -636,6 +692,9 @@ def main():
         render_remedies_section(remedies)
 
     with tab5:
+        render_knowledge_status_section(case_id, user_id)
+
+    with tab6:
         render_case_notes_section(case_id, user_id)
 
     st.markdown("---")

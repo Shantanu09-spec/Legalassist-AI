@@ -18,6 +18,7 @@ from .analytics import (
     KnowledgeGraphEdge,
     PrecedentMatch,
 )
+from .knowledge import KnowledgeInvalidation, KnowledgeInvalidationStatus
 
 __all__ = [
     "NotificationStatus",
@@ -55,5 +56,7 @@ __all__ = [
     "CaseArgument",
     "KnowledgeGraphEdge",
     "PrecedentMatch",
+    "KnowledgeInvalidation",
+    "KnowledgeInvalidationStatus",
 ]
 

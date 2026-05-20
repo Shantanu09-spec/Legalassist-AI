@@ -8,6 +8,12 @@ from .reports import (
     list_reports_by_user,
     list_reports_by_case,
 )
+from .knowledge import (
+    record_knowledge_invalidation,
+    list_knowledge_invalidations,
+    get_knowledge_freshness_summary,
+    process_due_knowledge_invalidations,
+)
 
 __all__ = [
     "create_report",
@@ -16,5 +22,9 @@ __all__ = [
     "update_report_status",
     "list_reports_by_user",
     "list_reports_by_case",
+    "record_knowledge_invalidation",
+    "list_knowledge_invalidations",
+    "get_knowledge_freshness_summary",
+    "process_due_knowledge_invalidations",
 ]
 

@@ -18,6 +18,7 @@ from db.models import (
     ModelFeedback,
     UserFeedback,
 )
+from db.crud.knowledge import record_knowledge_invalidation
 
 
 def create_case(db: Session, user_id: int, case_number: str, case_type: str, jurisdiction: str, title: Optional[str] = None) -> Case:
@@ -103,6 +104,20 @@ def create_case_document(
     db.add(doc)
     db.commit()
     db.refresh(doc)
+
+    record_knowledge_invalidation(
+        db,
+        scope_type="case",
+        case_id=case_id,
+        document_id=doc.id,
+        user_id=user_id,
+        reason="document_created",
+        details={
+            "document_type": getattr(document_type, "value", document_type),
+            "source_attachment_id": source_attachment_id,
+            "changed_fields": ["document_content", "summary", "remedies", "extracted_metadata"],
+        },
+    )
     return doc
 
 
@@ -236,21 +251,42 @@ def update_case_document(
     """Update case document"""
     doc = db.query(CaseDocument).filter(CaseDocument.id == document_id).first()
     if doc:
+        changed_fields = []
         if document_content is not None:
             doc.document_content = document_content
+            changed_fields.append("document_content")
         if summary is not None:
             doc.summary = summary
+            changed_fields.append("summary")
         if remedies is not None:
             doc.remedies = remedies
+            changed_fields.append("remedies")
         if extracted_metadata is not None:
             doc.extracted_metadata = extracted_metadata
+            changed_fields.append("extracted_metadata")
         if extraction_method is not None:
             doc.extraction_method = extraction_method
+            changed_fields.append("extraction_method")
         if ocr_used is not None:
             doc.ocr_used = ocr_used
+            changed_fields.append("ocr_used")
         try:
             db.commit()
             db.refresh(doc)
+            if changed_fields:
+                reason = f"{changed_fields[0]}_updated"
+                record_knowledge_invalidation(
+                    db,
+                    scope_type="case",
+                    case_id=doc.case_id,
+                    document_id=doc.id,
+                    reason=reason,
+                    details={
+                        "changed_fields": changed_fields,
+                        "document_id": doc.id,
+                        "case_id": doc.case_id,
+                    },
+                )
         except Exception as e:
             db.rollback()
             raise RuntimeError(f"Database write failed for case document {document_id}: {str(e)}") from e
