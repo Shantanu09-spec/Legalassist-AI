@@ -53,6 +53,59 @@ ANALYTICS_PATH_PREFIXES = (
 )
 IDEMPOTENT_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
+# Whitelist of idempotent paths that are considered safe to cache full response bodies.
+# Paths not in this list will have response bodies stripped from the idempotency cache
+# to avoid storing sensitive content (documents, PII, etc.).
+SAFE_IDEMPOTENT_PREFIXES = (
+    "/api/v1/cases",
+    "/api/v1/reports",
+    "/api/v1/deadlines",
+    "/api/v1/analytics",
+)
+
+
+def is_safe_to_cache(path: str) -> bool:
+    """Return True when a path is explicitly allowed to cache full response bodies."""
+    return any(path.startswith(p) for p in SAFE_IDEMPOTENT_PREFIXES)
+
+
+def _response_contains_sensitive_fields(body_bytes: bytes, headers: dict) -> bool:
+    """Heuristic to detect sensitive JSON fields in response body.
+
+    If the response looks like JSON, scan keys for common sensitive keywords.
+    Conservative by default: if we can't parse JSON, assume potential sensitivity
+    to avoid accidental caching of binary or document content.
+    """
+    content_type = (headers.get("content-type") or "").lower()
+    # Only attempt JSON parsing for JSON-like responses
+    if "application/json" not in content_type:
+        # Non-JSON responses (e.g., PDFs) are considered sensitive
+        return True
+
+    try:
+        import json as _json
+
+        data = _json.loads(body_bytes.decode("utf-8"))
+    except Exception:
+        return True
+
+    sensitive_keywords = {"document", "content", "text", "file", "pii", "ssn", "email", "phone", "dob"}
+
+    def scan(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if any(k.lower().find(kw) != -1 for kw in sensitive_keywords):
+                    return True
+                if scan(v):
+                    return True
+        elif isinstance(obj, list):
+            for item in obj:
+                if scan(item):
+                    return True
+        return False
+
+    return scan(data)
+
 
 def _request_principal(request: Request) -> str:
     """Derive a safe principal for idempotency keys.
@@ -150,11 +203,12 @@ async def idempotency_middleware(request: Request, call_next: Callable):
 
     body = await request.body()
     body_fingerprint = hashlib.sha256(body or b"").hexdigest()
+    principal = _request_principal(request)
     key = http_idempotency_manager.build_http_key(
         method=request.method,
         path=request.url.path,
         idempotency_key=idempotency_key,
-        principal=_request_principal(request),
+        principal=principal,
         body=body,
     )
 
@@ -168,10 +222,21 @@ async def idempotency_middleware(request: Request, call_next: Callable):
                     "message": "This Idempotency-Key was already used with a different request body.",
                 },
             )
+        # If the cached record had its body stripped for sensitivity, don't replay the body
+        headers = {**cached["headers"], "X-Idempotent-Replay": "true"}
+        if cached.get("body_stripped"):
+            headers["X-Idempotent-Body-Stripped"] = "true"
+            return Response(
+                content=b"",
+                status_code=cached["status_code"],
+                headers=headers,
+                media_type=cached.get("media_type") or cached["headers"].get("content-type"),
+            )
+
         return Response(
             content=cached["body"],
             status_code=cached["status_code"],
-            headers={**cached["headers"], "X-Idempotent-Replay": "true"},
+            headers=headers,
             media_type=cached.get("media_type") or cached["headers"].get("content-type"),
         )
 
@@ -199,12 +264,31 @@ async def idempotency_middleware(request: Request, call_next: Callable):
         response_body += chunk
 
     headers = _response_headers_for_cache(response)
+
+    # Determine whether full body caching is permitted for this path
+    safe_path = is_safe_to_cache(request.url.path)
+
+    # If path is not explicitly safe, do not store full response body to avoid caching PII/files
+    body_to_store = b""
+    body_stripped = False
+
+    if safe_path:
+        # Even on safe paths, strip body if it looks sensitive
+        if response.status_code < 400 and not _response_contains_sensitive_fields(response_body, headers):
+            body_to_store = response_body
+        else:
+            body_stripped = True
+    else:
+        # For non-safe paths, avoid storing the body entirely
+        body_stripped = True
+
     cache_payload = {
         "status_code": response.status_code,
         "headers": headers,
-        "body": response_body,
+        "body": body_to_store,
         "media_type": response.media_type or headers.get("content-type"),
         "request_fingerprint": body_fingerprint,
+        "body_stripped": body_stripped,
     }
 
     if response.status_code < 400:
