@@ -16,6 +16,7 @@ from fastapi import status
 import structlog
 
 from api.config import get_settings
+from api.errors import StructuredAPIError, register_structured_error_handlers, structured_error_response
 from api.middlewares import register_middlewares
 from api.csrf import CSRFProtectionMiddleware
 from api.limiter import cleanup_limiter
@@ -151,6 +152,7 @@ def create_app() -> FastAPI:
 
     # Add middleware through a single registration entry to preserve order.
     register_middlewares(app)
+    register_structured_error_handlers(app)
 
     if _GRAPHQL_ROUTER is not None:
         app.include_router(
@@ -238,12 +240,11 @@ def create_app() -> FastAPI:
             path=request.url.path,
             detail=exc.detail
         )
-        return JSONResponse(
+        return structured_error_response(
             status_code=exc.status_code,
-            content={
-                "error_code": "VALIDATION_ERROR",
-                "message": exc.detail
-            }
+            error_code="VALIDATION_ERROR",
+            message=exc.detail,
+            request=request,
         )
     
     @app.exception_handler(PayloadTooLargeError)
@@ -254,12 +255,27 @@ def create_app() -> FastAPI:
             path=request.url.path,
             detail=exc.detail
         )
-        return JSONResponse(
+        return structured_error_response(
             status_code=exc.status_code,
-            content={
-                "error_code": "PAYLOAD_TOO_LARGE",
-                "message": exc.detail
-            }
+            error_code="PAYLOAD_TOO_LARGE",
+            message=exc.detail,
+            request=request,
+        )
+
+    @app.exception_handler(StructuredAPIError)
+    async def structured_api_error_handler(request: Request, exc: StructuredAPIError):
+        """Handle structured security errors from auth and CSRF helpers."""
+        logger.warning(
+            "structured_api_error",
+            path=request.url.path,
+            error_code=exc.error_code,
+            detail=exc.message,
+        )
+        return structured_error_response(
+            status_code=exc.status_code,
+            error_code=exc.error_code,
+            message=exc.message,
+            request=request,
         )
     
     # ========================================================================

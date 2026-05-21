@@ -14,6 +14,7 @@ from fastapi import Request, HTTPException, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from api.config import get_settings
+from api.errors import StructuredAPIError, structured_error_response
 
 logger = structlog.get_logger(__name__)
 
@@ -22,9 +23,9 @@ CSRF_TOKEN_HEADER = "X-CSRF-Token"
 CSRF_COOKIE_NAME = "csrf_token"
 
 
-class CSRFError(HTTPException):
-    def __init__(self, detail: str = "CSRF validation failed"):
-        super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+class CSRFError(StructuredAPIError):
+    def __init__(self, error_code: str, detail: str = "CSRF validation failed"):
+        super().__init__(status_code=status.HTTP_403_FORBIDDEN, error_code=error_code, message=detail)
 
 
 def generate_csrf_token() -> str:
@@ -96,20 +97,23 @@ def validate_csrf_request(
 
     if not is_same_origin(request, allowed_hosts):
         logger.warning("csrf_cross_origin_rejected", origin=origin, path=str(request.url.path))
-        raise CSRFError(detail="Cross-origin requests not allowed")
+        raise CSRFError(error_code="CSRF_CROSS_ORIGIN_REJECTED", detail="Cross-origin requests not allowed")
 
     if require_token:
         token = request.headers.get(CSRF_TOKEN_HEADER) or request.headers.get(CSRF_TOKEN_HEADER.lower())
         cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
         if not token:
             logger.warning("csrf_missing_token", path=str(request.url.path))
-            raise CSRFError(detail=f"Missing CSRF token. Include '{CSRF_TOKEN_HEADER}' header.")
+            raise CSRFError(
+                error_code="CSRF_MISSING_TOKEN",
+                detail=f"Missing CSRF token. Include '{CSRF_TOKEN_HEADER}' header.",
+            )
         if not cookie_token:
             logger.warning("csrf_missing_cookie", path=str(request.url.path))
-            raise CSRFError(detail="Missing CSRF cookie.")
+            raise CSRFError(error_code="CSRF_MISSING_COOKIE", detail="Missing CSRF cookie.")
         if not secrets.compare_digest(token, cookie_token):
             logger.warning("csrf_token_mismatch", path=str(request.url.path))
-            raise CSRFError(detail="CSRF token mismatch.")
+            raise CSRFError(error_code="CSRF_TOKEN_MISMATCH", detail="CSRF token mismatch.")
 
 
 class CSRFProtectionMiddleware(BaseHTTPMiddleware):
@@ -143,16 +147,20 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
                 # If there's an Origin header, check same-origin and validate CSRF token
                 if not is_same_origin(request, self.allowed_hosts):
                     logger.warning("csrf_cross_origin_blocked", origin=origin, path=path)
-                    return JSONResponse(
+                    return structured_error_response(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        content={"detail": "Cross-origin request blocked"},
+                        error_code="CSRF_CROSS_ORIGIN_BLOCKED",
+                        message="Cross-origin request blocked",
+                        request=request,
                     )
                 try:
                     validate_csrf_request(request, allowed_hosts=self.allowed_hosts)
                 except CSRFError as exc:
-                    return JSONResponse(
+                    return structured_error_response(
                         status_code=exc.status_code,
-                        content={"detail": exc.detail},
+                        error_code=exc.error_code,
+                        message=exc.message,
+                        request=request,
                     )
 
         # 2. Proceed with the request

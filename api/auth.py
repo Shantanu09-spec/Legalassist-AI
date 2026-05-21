@@ -13,6 +13,7 @@ import hashlib
 from sqlalchemy.orm import Session
 
 from api.config import get_settings
+from api.errors import StructuredAPIError
 from database import SessionLocal
 from db.models import APIKey, User
 
@@ -204,33 +205,21 @@ async def get_current_user(
         try:
             payload = verify_token(token)
         except TokenExpiredError:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token has expired"
-            )
+            raise StructuredAPIError(status_code=status.HTTP_401_UNAUTHORIZED, error_code="TOKEN_EXPIRED", message="Token has expired")
         except InvalidTokenError:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token"
-            )
+            raise StructuredAPIError(status_code=status.HTTP_401_UNAUTHORIZED, error_code="INVALID_TOKEN", message="Invalid token")
 
         user_id = payload.get("sub")
         token_email = payload.get("email")
 
         if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token payload"
-            )
+            raise StructuredAPIError(status_code=status.HTTP_401_UNAUTHORIZED, error_code="INVALID_TOKEN_PAYLOAD", message="Invalid token payload")
 
         db = SessionLocal()
         try:
             user = db.query(User).filter(User.id == int(user_id)).first()
             if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="User not found"
-                )
+                raise StructuredAPIError(status_code=status.HTTP_401_UNAUTHORIZED, error_code="USER_NOT_FOUND", message="User not found")
             return CurrentUser(user.id, user.email, "admin" if getattr(user, "is_admin", False) else "user")
         finally:
             db.close()
@@ -246,10 +235,7 @@ async def get_current_user(
     if api_key:
         
         if "." not in api_key:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid API key format"
-            )
+            raise StructuredAPIError(status_code=status.HTTP_401_UNAUTHORIZED, error_code="INVALID_API_KEY_FORMAT", message="Invalid API key format")
 
         key_id, secret = api_key.split(".", 1)
 
@@ -260,22 +246,13 @@ async def get_current_user(
             ).first()
 
             if not key_record:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid API key"
-                )
+                raise StructuredAPIError(status_code=status.HTTP_401_UNAUTHORIZED, error_code="INVALID_API_KEY", message="Invalid API key")
 
             if not key_record.is_valid():
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="API key has expired"
-                )
+                raise StructuredAPIError(status_code=status.HTTP_401_UNAUTHORIZED, error_code="API_KEY_EXPIRED", message="API key has expired")
 
             if not verify_api_key(secret, key_record.key_salt, key_record.key_hash):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid API key"
-                )
+                raise StructuredAPIError(status_code=status.HTTP_401_UNAUTHORIZED, error_code="INVALID_API_KEY", message="Invalid API key")
 
             # Check if linked to a database user
             if key_record.user_id:
@@ -328,18 +305,12 @@ async def get_current_user_optional(
 async def get_admin_user(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     """Verify user is admin"""
     if user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
+        raise StructuredAPIError(status_code=status.HTTP_403_FORBIDDEN, error_code="ADMIN_ACCESS_REQUIRED", message="Admin access required")
     return user
 
 
 async def get_attorney_user(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     """Verify user is attorney or admin"""
     if user.role not in ["attorney", "admin"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Attorney access required"
-        )
+        raise StructuredAPIError(status_code=status.HTTP_403_FORBIDDEN, error_code="ATTORNEY_ACCESS_REQUIRED", message="Attorney access required")
     return user

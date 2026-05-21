@@ -11,9 +11,9 @@ from typing import Callable
 
 import structlog
 from fastapi import HTTPException, Request, status
-from fastapi.responses import JSONResponse
 
 from api.config import get_settings
+from api.errors import structured_error_response
 from api.middlewares.idempotency import http_idempotency_manager, idempotency_middleware, is_safe_to_cache
 from api.middlewares.rate_limit import rate_limit_middleware
 from api.middlewares.request_size import request_size_limit_middleware
@@ -69,12 +69,11 @@ async def error_handling_middleware(request: Request, call_next: Callable):
         )
         record_api_error(request.url.path, exc)
         capture_exception(exc, path=request.url.path, method=request.method)
-        return JSONResponse(
+        return structured_error_response(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "error_code": "INTERNAL_SERVER_ERROR",
-                "message": "An internal error occurred",
-            },
+            error_code="INTERNAL_SERVER_ERROR",
+            message="An internal error occurred",
+            request=request,
         )
 
 
