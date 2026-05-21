@@ -7,6 +7,7 @@ GET /api/v1/auth/me - Get current user
 from fastapi import APIRouter, HTTPException, status, Depends
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
+from passlib.context import CryptContext
 from database import get_db
 from db.models import APIKey
 from api.auth import create_access_token, create_api_key_record, CurrentUser, get_current_user
@@ -14,6 +15,8 @@ from database import SessionLocal
 from api.models import TokenResponse, APIKeyCreate, APIKeyResponse
 from api.limiter import RateLimit
 import structlog
+
+_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 logger = structlog.get_logger(__name__)
@@ -41,7 +44,13 @@ async def get_token(
     db = SessionLocal()
     try:
         user = get_user_by_email(db, username)
-        if not user:
+        if not user or not user.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials"
+            )
+
+        if not _pwd_ctx.verify(password, user.password_hash):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid credentials"
