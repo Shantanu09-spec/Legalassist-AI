@@ -23,6 +23,7 @@ from api.auth import (
     CurrentUser,
     verify_api_key,
 )
+from api.errors import register_structured_error_handlers
 import api.auth
 import database
 import db.session as db_session_module
@@ -56,6 +57,7 @@ def setup_database(monkeypatch):
 
 # Test application wrapping get_current_user dependency
 app = FastAPI()
+register_structured_error_handlers(app)
 
 
 @app.get("/protected")
@@ -75,6 +77,18 @@ def test_api_key_valid_without_user(setup_database):
     combined_key, record = create_api_key_record(db, name="Test Key No User")
     
     response = client.get("/protected", headers={"Authorization": f"Bearer {combined_key}"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["user_id"] == 0
+    assert data["email"] == "api_user"
+    assert data["role"] == "api"
+
+
+def test_api_key_valid_without_user_via_x_api_key(setup_database):
+    db = setup_database
+    combined_key, record = create_api_key_record(db, name="Test Key No User")
+
+    response = client.get("/protected", headers={"X-API-Key": combined_key})
     assert response.status_code == 200
     data = response.json()
     assert data["user_id"] == 0
@@ -122,14 +136,20 @@ def test_api_key_invalid_format(setup_database):
     # Missing period delimiter format
     response = client.get("/protected", headers={"Authorization": "Bearer key_invalidformat"})
     assert response.status_code == 401
-    assert "Invalid API key format" in response.json()["detail"]
+    payload = response.json()
+    assert payload["error_code"] == "INVALID_API_KEY_FORMAT"
+    assert "Invalid API key format" in payload["message"]
+    assert payload["request_id"]
 
 
 def test_api_key_nonexistent_key_id(setup_database):
     # Prefix key_id is not in DB
     response = client.get("/protected", headers={"Authorization": "Bearer key_nonexistent.secretstuff"})
     assert response.status_code == 401
-    assert "Invalid API key" in response.json()["detail"]
+    payload = response.json()
+    assert payload["error_code"] == "INVALID_API_KEY"
+    assert "Invalid API key" in payload["message"]
+    assert payload["request_id"]
 
 
 def test_api_key_incorrect_secret(setup_database):
@@ -141,7 +161,10 @@ def test_api_key_incorrect_secret(setup_database):
     bad_key = f"{key_id}.wrongsecret"
     response = client.get("/protected", headers={"Authorization": f"Bearer {bad_key}"})
     assert response.status_code == 401
-    assert "Invalid API key" in response.json()["detail"]
+    payload = response.json()
+    assert payload["error_code"] == "INVALID_API_KEY"
+    assert "Invalid API key" in payload["message"]
+    assert payload["request_id"]
 
 
 def test_api_key_expired(setup_database):
@@ -166,4 +189,7 @@ def test_api_key_expired(setup_database):
     combined_key = f"{key_id}.{secret}"
     response = client.get("/protected", headers={"Authorization": f"Bearer {combined_key}"})
     assert response.status_code == 401
-    assert "API key has expired" in response.json()["detail"]
+    payload = response.json()
+    assert payload["error_code"] == "API_KEY_EXPIRED"
+    assert "API key has expired" in payload["message"]
+    assert payload["request_id"]

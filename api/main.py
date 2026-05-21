@@ -16,14 +16,7 @@ from fastapi import status
 import structlog
 
 from api.config import get_settings
-from api.middleware import (
-    rate_limit_middleware,
-    add_correlation_id_middleware,
-    error_handling_middleware,
-    logging_middleware,
-    request_size_limit_middleware,
-    idempotency_middleware,
-)
+from api.middlewares import register_middlewares
 from api.csrf import CSRFProtectionMiddleware
 from api.limiter import cleanup_limiter
 from observability.integration import initialize_observability_for_environment
@@ -155,16 +148,9 @@ def create_app() -> FastAPI:
     
     # Initialize validation config from settings
     ValidationConfig.from_settings(settings)
-    
-    # Add middleware
-    app.middleware("http")(request_size_limit_middleware)
-    app.middleware("http")(idempotency_middleware)
-    app.middleware("http")(add_correlation_id_middleware)
-    app.middleware("http")(logging_middleware)
-    app.middleware("http")(error_handling_middleware)
 
-    if settings.RATE_LIMIT_ENABLED:
-        app.middleware("http")(rate_limit_middleware)
+    # Add middleware through a single registration entry to preserve order.
+    register_middlewares(app)
 
     if _GRAPHQL_ROUTER is not None:
         app.include_router(
@@ -252,12 +238,11 @@ def create_app() -> FastAPI:
             path=request.url.path,
             detail=exc.detail
         )
-        return JSONResponse(
+        return structured_error_response(
             status_code=exc.status_code,
-            content={
-                "error_code": "VALIDATION_ERROR",
-                "message": exc.detail
-            }
+            error_code="VALIDATION_ERROR",
+            message=exc.detail,
+            request=request,
         )
     
     @app.exception_handler(PayloadTooLargeError)
@@ -268,12 +253,27 @@ def create_app() -> FastAPI:
             path=request.url.path,
             detail=exc.detail
         )
-        return JSONResponse(
+        return structured_error_response(
             status_code=exc.status_code,
-            content={
-                "error_code": "PAYLOAD_TOO_LARGE",
-                "message": exc.detail
-            }
+            error_code="PAYLOAD_TOO_LARGE",
+            message=exc.detail,
+            request=request,
+        )
+
+    @app.exception_handler(StructuredAPIError)
+    async def structured_api_error_handler(request: Request, exc: StructuredAPIError):
+        """Handle structured security errors from auth and CSRF helpers."""
+        logger.warning(
+            "structured_api_error",
+            path=request.url.path,
+            error_code=exc.error_code,
+            detail=exc.message,
+        )
+        return structured_error_response(
+            status_code=exc.status_code,
+            error_code=exc.error_code,
+            message=exc.message,
+            request=request,
         )
     
     # ========================================================================

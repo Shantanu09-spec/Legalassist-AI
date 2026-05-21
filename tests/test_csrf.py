@@ -58,7 +58,10 @@ def test_post_with_origin_but_no_cookie_or_header_fails():
     client.cookies.clear()
     response = client.post("/test-post", headers={"Origin": "http://localhost"})
     assert response.status_code == 403
-    assert "Missing CSRF token" in response.json()["detail"]
+    payload = response.json()
+    assert payload["error_code"] == "CSRF_MISSING_TOKEN"
+    assert "Missing CSRF token" in payload["message"]
+    assert payload["request_id"]
 
 def test_post_with_origin_and_header_but_no_cookie_fails():
     """Test that a request with header but no cookie fails."""
@@ -69,7 +72,10 @@ def test_post_with_origin_and_header_but_no_cookie_fails():
     }
     response = client.post("/test-post", headers=headers)
     assert response.status_code == 403
-    assert "Missing CSRF cookie" in response.json()["detail"]
+    payload = response.json()
+    assert payload["error_code"] == "CSRF_MISSING_COOKIE"
+    assert "Missing CSRF cookie" in payload["message"]
+    assert payload["request_id"]
 
 def test_post_with_origin_and_mismatched_tokens_fails():
     """Test that mismatched cookie and header values fail."""
@@ -81,7 +87,10 @@ def test_post_with_origin_and_mismatched_tokens_fails():
     client.cookies.set(CSRF_COOKIE_NAME, "different-cookie-token")
     response = client.post("/test-post", headers=headers)
     assert response.status_code == 403
-    assert "CSRF token mismatch" in response.json()["detail"]
+    payload = response.json()
+    assert payload["error_code"] == "CSRF_TOKEN_MISMATCH"
+    assert "CSRF token mismatch" in payload["message"]
+    assert payload["request_id"]
     client.cookies.clear()
 
 def test_post_with_matching_tokens_succeeds():
