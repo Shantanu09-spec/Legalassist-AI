@@ -59,3 +59,24 @@ class TimelineRealtimeBus:
 
 
 timeline_realtime_bus = TimelineRealtimeBus()
+
+
+def publish_timeline_event_best_effort(payload: Dict[str, Any]) -> None:
+    """Publish a timeline event without depending on the caller's loop state."""
+    case_id = payload["case_id"]
+    publish_coro = timeline_realtime_bus.publish(case_id=case_id, payload=payload)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        loop.create_task(publish_coro)
+        return
+
+    fallback_loop = asyncio.new_event_loop()
+    try:
+        fallback_loop.run_until_complete(publish_coro)
+    finally:
+        fallback_loop.close()
