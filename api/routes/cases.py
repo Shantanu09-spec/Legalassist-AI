@@ -58,6 +58,23 @@ def _build_case_summary_payload(case: Case, latest_doc: CaseDocument | None = No
     }
 
 
+def get_owned_case(case_id: str, current_user: CurrentUser, db: Session) -> Case:
+    try:
+        case_id_int = int(case_id)
+        user_id_int = int(current_user.user_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid case ID format")
+
+    case = db.query(Case).filter(Case.id == case_id_int).first()
+    if not case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
+
+    if case.user_id != user_id_int:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: You do not own this case")
+
+    return case
+
+
 @router.post(
     "/search",
     response_model=CaseSearchResponse,
@@ -320,20 +337,9 @@ async def get_case_timeline(
         user_id=current_user.user_id,
     )
 
-    try:
-        case_id_int = int(case_id)
-        user_id_int = int(current_user.user_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid case ID format")
+    case = get_owned_case(case_id, current_user, db)
 
-    case = db.query(Case).filter(Case.id == case_id_int).first()
-    if not case:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
-
-    if case.user_id != user_id_int:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: You do not own this case")
-
-    timeline_events = _timeline_service.get_case_timeline(db, case_id_int)
+    timeline_events = _timeline_service.get_case_timeline(db, case.id)
     return CaseTimeline.model_validate(_build_case_timeline_payload(case, timeline_events))
 
 
@@ -353,37 +359,7 @@ async def get_case_details(
         case_id=case_id,
         user_id=current_user.user_id
     )
-    
-    try:
-        user_id_int = int(current_user.user_id)
-    except (ValueError, TypeError):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid user ID format"
-        )
-        
-    try:
-        case_id_int = int(case_id)
-    except (ValueError, TypeError):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid case ID format"
-        )
-        
-    case = db.query(Case).filter(Case.id == case_id_int).first()
-    
-    if not case:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Case not found"
-        )
-        
-    if case.user_id != user_id_int:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: You do not own this case"
-        )
-        
+    case = get_owned_case(case_id, current_user, db)
     latest_docs = fetch_latest_documents_per_case(db, [case.id])
 
     return _build_case_summary_payload(case, latest_docs.get(case.id))
@@ -402,17 +378,9 @@ async def upload_case_document_endpoint(
     db: Session = Depends(get_db),
 ) -> dict:
     """Store an upload, create linked attachment/document rows, and queue OCR extraction."""
-    try:
-        case_id_int = int(case_id)
-        user_id_int = int(current_user.user_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ID format")
-
-    case = db.query(Case).filter(Case.id == case_id_int).first()
-    if not case:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
-    if case.user_id != user_id_int:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: You do not own this case")
+    case = get_owned_case(case_id, current_user, db)
+    case_id_int = case.id
+    user_id_int = int(current_user.user_id)
 
     allowed_extensions = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
     allowed_mime_types = {
@@ -479,17 +447,9 @@ async def save_case_note_draft_endpoint(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    try:
-        case_id_int = int(case_id)
-        user_id_int = int(current_user.user_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ID format")
-
-    case = db.query(Case).filter(Case.id == case_id_int).first()
-    if not case:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
-    if case.user_id != user_id_int:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: You do not own this case")
+    case = get_owned_case(case_id, current_user, db)
+    case_id_int = case.id
+    user_id_int = int(current_user.user_id)
 
     note = save_case_note_draft(
         db,
@@ -517,17 +477,9 @@ async def publish_case_note_endpoint(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    try:
-        case_id_int = int(case_id)
-        user_id_int = int(current_user.user_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ID format")
-
-    case = db.query(Case).filter(Case.id == case_id_int).first()
-    if not case:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
-    if case.user_id != user_id_int:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: You do not own this case")
+    case = get_owned_case(case_id, current_user, db)
+    case_id_int = case.id
+    user_id_int = int(current_user.user_id)
 
     version = publish_case_note(
         db,
@@ -557,17 +509,9 @@ async def get_case_note_history_endpoint(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CaseNoteHistoryResponse:
-    try:
-        case_id_int = int(case_id)
-        user_id_int = int(current_user.user_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ID format")
-
-    case = db.query(Case).filter(Case.id == case_id_int).first()
-    if not case:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
-    if case.user_id != user_id_int:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: You do not own this case")
+    case = get_owned_case(case_id, current_user, db)
+    case_id_int = case.id
+    user_id_int = int(current_user.user_id)
 
     versions = get_case_note_history(db, case_id_int, user_id_int)
     return CaseNoteHistoryResponse(
