@@ -156,7 +156,7 @@ else:
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=engine)
-Base = declarative_base()
+from db.base import Base
 
 logger = logging.getLogger(__name__)
 
