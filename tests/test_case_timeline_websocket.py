@@ -1,9 +1,10 @@
-import json
 import os
 
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
+
+from core.timeline_payloads import TimelineEventPayload
 
 # api.main -> api.config loads settings at import-time. Ensure required env vars exist.
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
@@ -56,10 +57,11 @@ def test_case_timeline_ws_subscribed_and_forwards_event(mock_verify_token, clien
     case_id = 1
 
     # Accept the websocket connection. Provide auth via Sec-WebSocket-Protocol subprotocol
-    with client.websocket_connect(
+    websocket = client.websocket_connect(
         f"/ws/cases/{case_id}/timeline",
         subprotocols=["access_token", "valid_token"],
-    ) as websocket:
+    ).__enter__()
+    try:
         first = websocket.receive_json()
         assert first["type"] == "subscribed"
         assert first["case_id"] == case_id
@@ -83,11 +85,13 @@ def test_case_timeline_ws_subscribed_and_forwards_event(mock_verify_token, clien
         asyncio.run(timeline_realtime_bus.publish(case_id=case_id, payload=timeline_payload))
 
         msg = websocket.receive_json()
-        assert msg["type"] == "timeline_event"
-        assert msg["case_id"] == case_id
-        assert msg["event_type"] == "deadline_created"
-        assert msg["description"] == "Manual deadline added"
-        assert msg["metadata"]["deadline_id"] == 999
-        assert msg["event_id"] == 555
-
+        validated = TimelineEventPayload.model_validate(msg)
+        assert validated.type == "timeline_event"
+        assert validated.case_id == case_id
+        assert validated.event_type == "deadline_created"
+        assert validated.description == "Manual deadline added"
+        assert validated.timestamp.isoformat() == "2023-01-01T00:00:00+00:00"
+        assert validated.metadata["deadline_id"] == 999
+        assert validated.event_id == 555
+    finally:
         websocket.close()

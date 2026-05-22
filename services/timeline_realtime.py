@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime
 from dataclasses import dataclass, field
 from typing import Any, Dict, Set
 
-from core.time_serialization import to_utc_iso
+from core.timeline_payloads import TimelineEventPayload
 
 
 @dataclass
@@ -56,24 +55,10 @@ class TimelineRealtimeBus:
         async with self._global_lock:
             self._channels.clear()
 
-    def _json_safe_value(self, value: Any) -> Any:
-        if isinstance(value, datetime):
-            return to_utc_iso(value)
-        if isinstance(value, date):
-            return value.isoformat()
-        if isinstance(value, dict):
-            return {key: self._json_safe_value(inner_value) for key, inner_value in value.items()}
-        if isinstance(value, list):
-            return [self._json_safe_value(item) for item in value]
-        if isinstance(value, tuple):
-            return [self._json_safe_value(item) for item in value]
-        if isinstance(value, set):
-            return [self._json_safe_value(item) for item in value]
-        return value
-
     async def publish(self, case_id: int, payload: Dict[str, Any]) -> None:
         channel = await self._get_or_create_channel(case_id)
-        message = self._json_safe_value(payload)
+        validated_payload = TimelineEventPayload.model_validate(payload)
+        message = validated_payload.model_dump(mode="json")
         async with channel.lock:
             targets = list(channel.connections)
 

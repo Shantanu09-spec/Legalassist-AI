@@ -11,6 +11,7 @@ from contextlib import suppress
 from fastapi import FastAPI, WebSocket, Query
 from fastapi import Depends
 from api.auth import AuthError, TokenExpiredError, InvalidTokenError, verify_token as _verify_token
+from core.timeline_payloads import TimelineEventPayload
 from services.timeline_realtime import timeline_realtime_bus, TimelineRealtimeBus
 from typing import Optional
 
@@ -56,8 +57,8 @@ async def forward_timeline_events(websocket: WebSocket, case_id: int, bus: Timel
                     await queue_task
                 break
 
-            payload_obj = queue_task.result()
-            await websocket.send_json(payload_obj)
+            payload_obj = TimelineEventPayload.model_validate(queue_task.result())
+            await websocket.send_json(payload_obj.model_dump(mode="json"))
     finally:
         disconnect_task.cancel()
         with suppress(asyncio.CancelledError, RuntimeError):

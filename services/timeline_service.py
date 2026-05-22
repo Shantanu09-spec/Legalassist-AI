@@ -6,6 +6,7 @@ import datetime as dt
 from typing import Any, Dict, List, Optional
 
 from core.time_serialization import to_utc_iso
+from core.timeline_payloads import TimelineEventPayload
 from sqlalchemy.orm import Session
 
 from db.models import CaseDocument, CaseDeadline, CaseTimeline, NotificationLog
@@ -41,12 +42,13 @@ class TimelineService:
             "case_id": case_id,
             "event_type": event.event_type,
             "description": event.description,
-            "timestamp": to_utc_iso(event.event_date),
+            "timestamp": event.event_date,
             "metadata": event.event_metadata or {},
             "event_id": event.id,
         }
         try:
-            publish_timeline_event_best_effort(payload)
+            validated_payload = TimelineEventPayload.model_validate(payload)
+            publish_timeline_event_best_effort(validated_payload.model_dump(mode="json"))
         except Exception:
             pass
 
