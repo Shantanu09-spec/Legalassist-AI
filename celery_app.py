@@ -20,6 +20,8 @@ import os
 import uuid
 import structlog
 import json
+import hashlib
+import re
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 import io
@@ -486,8 +488,17 @@ def analyze_document_task(
         Dict[str, Any]: The structured analysis results including identified remedies.
     """
     # Idempotency: prevent duplicate processing for same user/document
+    # Include a content hash so re-uploading an updated document triggers
+    # a new analysis even when user_id and document_id are the same.
+    content_parts = []
+    if file_bytes:
+        content_parts.append(hashlib.sha256(file_bytes).hexdigest())
+    if text:
+        content_parts.append(hashlib.sha256(text.encode("utf-8")).hexdigest())
+    content_hash = hashlib.sha256("|".join(content_parts).encode()).hexdigest()[:16] if content_parts else ""
+
     idemp = IdempotencyManager()
-    idempotency_key = f"analyze:{user_id}:{document_id}"
+    idempotency_key = f"analyze:{user_id}:{document_id}:{content_hash}"
     if not idemp.acquire(idempotency_key, ttl=300):
         # Another worker is processing or has processed this key
         existing = idemp.get_result(idempotency_key)
