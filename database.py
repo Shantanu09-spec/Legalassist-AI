@@ -147,12 +147,12 @@ _is_sqlite = _db_url.get_backend_name() == "sqlite"
 # End of Database Architecture Documentation
 # ==============================================================================
 
-engine_kwargs = {
-    "pool_size": 20,
-    "max_overflow": 10
-}
+engine_kwargs = {}
 if _is_sqlite:
     engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    engine_kwargs["pool_size"] = 20
+    engine_kwargs["max_overflow"] = 10
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=engine)
