@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -119,5 +120,53 @@ def test_publish_rejects_invalid_payload_shape():
                     "metadata": {},
                 },
             )
+
+    asyncio.run(scenario())
+
+
+def test_publish_keeps_latest_message_when_queue_is_full():
+    bus = TimelineRealtimeBus(queue_maxsize=1)
+
+    async def scenario() -> None:
+        queue = await bus.subscribe(7)
+        assert queue.maxsize == 1
+        assert bus.queue_maxsize == 1
+
+        with patch("services.timeline_realtime.logger.warning") as mock_warning:
+            await bus.publish(
+                7,
+                {
+                    "type": "timeline_event",
+                    "case_id": 7,
+                    "event_type": "deadline_created",
+                    "description": "Oldest message",
+                    "timestamp": datetime(2026, 5, 22, 10, 30, tzinfo=timezone.utc),
+                    "metadata": {},
+                    "event_id": 1,
+                },
+            )
+            await bus.publish(
+                7,
+                {
+                    "type": "timeline_event",
+                    "case_id": 7,
+                    "event_type": "deadline_created",
+                    "description": "Newest message",
+                    "timestamp": datetime(2026, 5, 22, 10, 31, tzinfo=timezone.utc),
+                    "metadata": {},
+                    "event_id": 2,
+                },
+            )
+
+            payload = await queue.get()
+            validated = TimelineEventPayload.model_validate(payload)
+
+            assert validated.description == "Newest message"
+            assert validated.event_id == 2
+            assert bus.dropped_messages_total == 1
+            assert bus._channels[7].dropped_messages == 1
+            assert mock_warning.call_count == 1
+            assert mock_warning.call_args.kwargs["policy"] == "drop_oldest_keep_latest"
+            assert mock_warning.call_args.kwargs["case_id"] == 7
 
     asyncio.run(scenario())
