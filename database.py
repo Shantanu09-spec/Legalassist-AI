@@ -9,6 +9,7 @@ from __future__ import annotations
 import enum
 import logging
 from contextlib import contextmanager
+
 from typing import List, Optional
 
 from sqlalchemy import (
@@ -30,6 +31,20 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 from config import Config
 from db.attachments_service import create_attachment, get_attachments_for_case
+from db.otp_service import (
+    _otp_rate_limit_key,
+    _get_otp_rate_limit_script,
+    _reserve_otp_rate_limit_slot,
+    create_otp_verification,
+    get_pending_otp,
+    mark_otp_as_used,
+    cleanup_expired_otps,
+    revoke_token,
+    is_token_revoked,
+    cleanup_expired_revoked_tokens,
+    record_otp_failed_attempt,
+    reset_otp_failed_attempts,
+)
 import datetime as dt
 import hashlib
 import threading
@@ -147,16 +162,16 @@ _is_sqlite = _db_url.get_backend_name() == "sqlite"
 # End of Database Architecture Documentation
 # ==============================================================================
 
-engine_kwargs = {
-    "pool_size": 20,
-    "max_overflow": 10
-}
+engine_kwargs = {}
 if _is_sqlite:
     engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    engine_kwargs["pool_size"] = 20
+    engine_kwargs["max_overflow"] = 10
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=engine)
-Base = declarative_base()
+from db.base import Base
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +195,7 @@ class NotificationChannel(str, enum.Enum):
 class CaseDeadline(Base):
     """Model for case deadlines"""
     __tablename__ = "case_deadlines"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -213,6 +229,7 @@ class CaseDeadline(Base):
 class UserPreference(Base):
     """Model for user notification preferences"""
     __tablename__ = "user_preferences"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
@@ -246,6 +263,7 @@ class UserPreference(Base):
 class NotificationLog(Base):
     """Model for tracking sent notifications"""
     __tablename__ = "notification_logs"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     deadline_id = Column(Integer, ForeignKey("case_deadlines.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -271,6 +289,7 @@ class NotificationLog(Base):
 class CaseRecord(Base):
     """Model for tracking individual case records (anonymized)"""
     __tablename__ = "case_records"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     hashed_case_id = Column(String(255), unique=True, nullable=False, index=True)  # Hashed ID for privacy
@@ -296,6 +315,7 @@ class CaseRecord(Base):
 class CaseOutcome(Base):
     """Model for tracking appeal outcomes and follow-ups"""
     __tablename__ = "case_outcomes"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("case_records.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
@@ -319,6 +339,7 @@ class CaseOutcome(Base):
 class CaseAnalytics(Base):
     """Model for aggregated analytics (refreshed periodically)"""
     __tablename__ = "case_analytics"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     case_type = Column(String(255), nullable=False)  # civil, criminal, etc.
@@ -349,6 +370,7 @@ class CaseAnalytics(Base):
 class NotificationTemplate(Base):
     """Per-user notification templates for SMS and Email"""
     __tablename__ = "notification_templates"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
@@ -366,6 +388,7 @@ class NotificationTemplate(Base):
 class UserFeedback(Base):
     """Model for tracking user feedback on case outcomes"""
     __tablename__ = "user_feedback"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -392,6 +415,7 @@ class UserFeedback(Base):
 class ModelFeedback(Base):
     """User feedback on model outputs for later training and evaluation"""
     __tablename__ = "model_feedback"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     user_id = Column(String(255), nullable=False, index=True)
@@ -412,6 +436,7 @@ class ModelFeedback(Base):
 class ModelPerformance(Base):
     """Aggregated model performance metrics (materialized/updated periodically)"""
     __tablename__ = "model_performance"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     model_name = Column(String(255), nullable=False, index=True)
@@ -432,6 +457,7 @@ class ModelPerformance(Base):
 class ModelRoutingRule(Base):
     """Rule for routing tasks to specific models based on case attributes"""
     __tablename__ = "model_routing_rule"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
@@ -450,6 +476,7 @@ class ModelRoutingRule(Base):
 class SimilarityFeedback(Base):
     """Model for tracking similarity search relevance feedback"""
     __tablename__ = "similarity_feedback"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     user_id = Column(String(255), nullable=False, index=True)
@@ -559,6 +586,7 @@ class User(Base):
     
     __table_args__ = (
         Index("ix_users_email", "email"),
+        {"extend_existing": True},
     )
 
     # -------------------------------------------------------------------------
@@ -741,6 +769,7 @@ class User(Base):
 class OTPVerification(Base):
     """Model for storing email OTP codes for authentication"""
     __tablename__ = "otp_verifications"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     email = Column(String(255), nullable=False, index=True)
@@ -772,6 +801,7 @@ class OTPVerification(Base):
 class RevokedToken(Base):
     """Model for storing revoked JWT tokens (logout blacklist)"""
     __tablename__ = "revoked_tokens"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     jti = Column(String(255), unique=True, nullable=False, index=True)  # JWT ID
@@ -803,7 +833,7 @@ class DocumentType(str, enum.Enum):
 class Case(Base):
     """Model for tracking user cases"""
     __tablename__ = "cases"
-    __table_args__ = (UniqueConstraint("user_id", "case_number", name="uq_user_case_number"),)
+    __table_args__ = (UniqueConstraint("user_id", "case_number", name="uq_user_case_number"), {"extend_existing": True})
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -835,6 +865,7 @@ class Case(Base):
 class CaseDocument(Base):
     """Model for storing documents uploaded for a case"""
     __tablename__ = "case_documents"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -860,6 +891,7 @@ class CaseDocument(Base):
 class Attachment(Base):
     """Model for storing uploaded attachments/evidence linked to cases or deadlines"""
     __tablename__ = "attachments"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -882,6 +914,7 @@ class Attachment(Base):
 class CaseTimeline(Base):
     """Model for tracking timeline events in a case"""
     __tablename__ = "case_timeline"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -901,6 +934,7 @@ class CaseTimeline(Base):
 class CaseComment(Base):
     """Threaded collaboration comment attached to a case."""
     __tablename__ = "case_comments"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -923,6 +957,7 @@ class CaseComment(Base):
 class CasePresence(Base):
     """Tracks recently active collaborators on a case."""
     __tablename__ = "case_presence"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -936,7 +971,7 @@ class CasePresence(Base):
     case = relationship("Case", back_populates="presence_updates")
     user = relationship("User", back_populates="case_presence")
 
-    __table_args__ = (UniqueConstraint("case_id", "user_id", name="uq_case_presence_user"),)
+    __table_args__ = (UniqueConstraint("case_id", "user_id", name="uq_case_presence_user"), {"extend_existing": True})
 
     def __repr__(self):
         return f"<CasePresence(case_id={self.case_id}, user_id={self.user_id}, last_seen={self.last_seen})>"
@@ -948,6 +983,7 @@ class CasePresence(Base):
 class CaseEmbedding(Base):
     """Model for storing semantic embeddings of cases for similarity search"""
     __tablename__ = "case_embeddings"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
@@ -978,6 +1014,7 @@ class CaseEmbedding(Base):
 class CaseIssue(Base):
     """Model for tracking legal issues/topics extracted from cases"""
     __tablename__ = "case_issues"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -1002,7 +1039,7 @@ class CaseIssue(Base):
     document = relationship("CaseDocument")
     arguments = relationship("CaseArgument", back_populates="issue", cascade="all, delete-orphan")
 
-    __table_args__ = (UniqueConstraint("case_id", "issue_name", name="uq_case_issue"),)
+    __table_args__ = (UniqueConstraint("case_id", "issue_name", name="uq_case_issue"), {"extend_existing": True})
 
     def __repr__(self):
         return f"<CaseIssue(case_id={self.case_id}, issue={self.issue_name})>"
@@ -1011,6 +1048,7 @@ class CaseIssue(Base):
 class CaseArgument(Base):
     """Model for tracking legal arguments used in cases"""
     __tablename__ = "case_arguments"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -1040,6 +1078,7 @@ class CaseArgument(Base):
 class KnowledgeGraphEdge(Base):
     """Model for building a knowledge graph: Case → Issue → Argument → Outcome"""
     __tablename__ = "knowledge_graph_edges"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     
@@ -1064,7 +1103,7 @@ class KnowledgeGraphEdge(Base):
     argument = relationship("CaseArgument")
     case = relationship("Case")
 
-    __table_args__ = (UniqueConstraint("issue_id", "argument_id", "case_id", name="uq_graph_edge"),)
+    __table_args__ = (UniqueConstraint("issue_id", "argument_id", "case_id", name="uq_graph_edge"), {"extend_existing": True})
 
     def __repr__(self):
         return f"<KnowledgeGraphEdge(issue={self.issue_id}, argument={self.argument_id}, outcome={self.outcome})>"
@@ -1073,6 +1112,7 @@ class KnowledgeGraphEdge(Base):
 class PrecedentMatch(Base):
     """Model for storing precedent matching results for quick lookup"""
     __tablename__ = "precedent_matches"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True)
     
@@ -1103,7 +1143,7 @@ class PrecedentMatch(Base):
     query_case = relationship("Case", foreign_keys=[query_case_id])
     precedent_case = relationship("Case", foreign_keys=[precedent_case_id])
 
-    __table_args__ = (UniqueConstraint("query_case_id", "precedent_case_id", "match_type", name="uq_precedent_match"),)
+    __table_args__ = (UniqueConstraint("query_case_id", "precedent_case_id", "match_type", name="uq_precedent_match"), {"extend_existing": True})
 
     def __repr__(self):
         return f"<PrecedentMatch(query={self.query_case_id}, precedent={self.precedent_case_id}, type={self.match_type})>"
@@ -1480,197 +1520,30 @@ def submit_model_feedback(
 def aggregate_model_performance(db: Session, task: Optional[str] = None) -> List[ModelPerformance]:
     """Compute simple model performance aggregates from `model_feedback` rows."""
     return []
-def _otp_rate_limit_key(identifier: str) -> str:
-    normalized = str(identifier).strip().lower()
-    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-    return f"otp:rate:{digest}"
 
 
-def _get_otp_rate_limit_script():
-    global _otp_rate_limit_client, _otp_rate_limit_script
-
-    if _otp_rate_limit_script is not None:
-        return _otp_rate_limit_script
-
-    with _otp_rate_limit_lock:
-        if _otp_rate_limit_script is None:
-            if redis is None:
-                raise RuntimeError("Redis is required for OTP rate limiting but is not installed.")
-
-            redis_url = getattr(Config, "REDIS_URL", "redis://localhost:6379/0")
-            _otp_rate_limit_client = redis.from_url(redis_url, decode_responses=True)
-            _otp_rate_limit_script = _otp_rate_limit_client.register_script(_OTP_RATE_LIMIT_SCRIPT)
-
-    return _otp_rate_limit_script
+def get_user_by_email(db: Session, email: str) -> Optional[User]:
+    """Get a user by email address."""
+    return db.query(User).filter(User.email == email).first()
 
 
-def _reset_otp_rate_limit_connection():
-    """Reset connection state for self-healing after Redis disconnection."""
-    global _otp_rate_limit_client, _otp_rate_limit_script
-    with _otp_rate_limit_lock:
-        _otp_rate_limit_client = None
-        _otp_rate_limit_script = None
-
-
-def _reserve_otp_rate_limit_slot(identifier: str, max_requests_per_hour: int, label: str = "identifier") -> int:
-    normalized_identifier = str(identifier).strip().lower()
-    if not normalized_identifier:
-        raise ValueError(f"{label} is required for OTP rate limiting")
-
-    try:
-        script = _get_otp_rate_limit_script()
-        current = int(script(keys=[_otp_rate_limit_key(normalized_identifier)], args=[_OTP_RATE_LIMIT_WINDOW_SECONDS]))
-    except (redis.ConnectionError, redis.TimeoutError, OSError, IOError) as exc:
-        _reset_otp_rate_limit_connection()
-        script = _get_otp_rate_limit_script()
-        current = int(script(keys=[_otp_rate_limit_key(normalized_identifier)], args=[_OTP_RATE_LIMIT_WINDOW_SECONDS]))
-
-    if current > max_requests_per_hour:
-        raise ValueError("Too many OTP requests. Please try again later.")
-
-    return current
-
-
-def _safe_reserve_otp_slot(identifier: str, max_requests_per_hour: int, label: str = "identifier") -> int:
-    try:
-        return _reserve_otp_rate_limit_slot(identifier, max_requests_per_hour, label=label)
-    except TypeError as exc:
-        if exc.__traceback__.tb_next is not None:
-            raise exc
-        try:
-            return _reserve_otp_rate_limit_slot(identifier, max_requests_per_hour, label)
-        except TypeError as exc_inner:
-            if exc_inner.__traceback__.tb_next is not None:
-                raise exc_inner
-            return _reserve_otp_rate_limit_slot(identifier, max_requests_per_hour)
-
-
-def create_otp_verification(
-    db: Session,
-    email: str,
-    otp_hash: str,
-    expires_at: dt.datetime,
-    max_requests_per_hour: int = 5,
-    requester_ip: Optional[str] = None,
-) -> OTPVerification:
-    """Create a new OTP verification record with rate limiting."""
-    _safe_reserve_otp_slot(email, max_requests_per_hour, label="Email")
-    if requester_ip:
-        _safe_reserve_otp_slot(requester_ip, max_requests_per_hour, label="IP")
-
-    otp = OTPVerification(
-        email=email,
-        otp_hash=otp_hash,
-        expires_at=expires_at,
-    )
-    db.add(otp)
+def create_user(db: Session, email: str) -> User:
+    """Create a new user."""
+    user = User(email=email)
+    db.add(user)
     db.commit()
-    db.refresh(otp)
-    return otp
+    db.refresh(user)
+    return user
 
 
-def get_pending_otp(db: Session, email: str) -> Optional[OTPVerification]:
-    """Get the latest unused, non-expired OTP for an email"""
-    now = dt.datetime.now(dt.timezone.utc)
-    return db.query(OTPVerification).filter(
-        OTPVerification.email == email,
-        OTPVerification.is_used == False,
-        OTPVerification.expires_at > now
-    ).order_by(OTPVerification.created_at.desc()).first()
-
-
-def mark_otp_as_used(db: Session, otp_id: int) -> bool:
-    """Atomically mark OTP as used. Returns True only if OTP was not already used."""
-    result = db.query(OTPVerification).filter(
-        OTPVerification.id == otp_id,
-        OTPVerification.is_used == False
-    ).update({"is_used": True}, synchronize_session=False)
-    try:
+def update_user_last_login(db: Session, user_id: int) -> Optional[User]:
+    """Update a user's last-login timestamp."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        user.last_login = dt.datetime.now(dt.timezone.utc)
         db.commit()
-        return result > 0
-    except Exception:
-        db.rollback()
-        return False
-
-
-def is_email_locked_out(db: Session, email: str) -> Optional[dt.datetime]:
-    """Check if email is currently locked out. Returns locked_until if locked, None otherwise."""
-    lockout = db.query(OTPVerification).filter(
-        OTPVerification.email == email,
-        OTPVerification.locked_until != None,
-        OTPVerification.locked_until > dt.datetime.now(dt.timezone.utc)
-    ).order_by(OTPVerification.locked_until.desc()).first()
-    return lockout.locked_until if lockout else None
-
-
-def record_otp_failed_attempt(db: Session, otp_id: int, lockout_duration_minutes: int = 15, max_failed_attempts: int = 5) -> bool:
-    """Record failed OTP attempt with email-level lockout protection."""
-    otp = db.query(OTPVerification).filter(OTPVerification.id == otp_id).first()
-    if otp:
-        otp.failed_attempts += 1
-        if otp.failed_attempts >= max_failed_attempts:
-            # Lock out at email level, not just OTP level
-            lockout_until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=lockout_duration_minutes)
-            otp.locked_until = lockout_until
-            
-            # Also lock all other pending OTPs for same email
-            db.query(OTPVerification).filter(
-                OTPVerification.email == otp.email,
-                OTPVerification.id != otp_id
-            ).update({"locked_until": lockout_until})
-        
-        db.commit()
-        db.refresh(otp)
-        return True
-    return False
-
-
-def reset_otp_failed_attempts(db: Session, otp_id: int) -> bool:
-    otp = db.query(OTPVerification).filter(OTPVerification.id == otp_id).first()
-    if otp:
-        otp.failed_attempts = 0
-        otp.locked_until = None
-        db.commit()
-        db.refresh(otp)
-        return True
-    return False
-
-
-def cleanup_expired_otps(db: Session) -> int:
-    """Delete expired OTP records"""
-    now = dt.datetime.now(dt.timezone.utc)
-    deleted = db.query(OTPVerification).filter(OTPVerification.expires_at < now).delete()
-    db.commit()
-    return deleted
-
-
-def revoke_token(db: Session, jti: str, expires_at: dt.datetime) -> RevokedToken:
-    token = RevokedToken(jti=jti, expires_at=expires_at)
-    db.add(token)
-    db.commit()
-    db.refresh(token)
-    return token
-
-
-def is_token_revoked(db: Session, jti: str) -> bool:
-    return db.query(RevokedToken).filter(RevokedToken.jti == jti).first() is not None
-
-
-def cleanup_expired_revoked_tokens(db: Session, batch_size: int = 1000) -> int:
-    """Delete expired revoked tokens in batches to avoid lock contention."""
-    now = dt.datetime.now(dt.timezone.utc)
-    total_deleted = 0
-
-    while True:
-        deleted = db.query(RevokedToken).filter(
-            RevokedToken.expires_at < now
-        ).limit(batch_size).delete(synchronize_session=False)
-        db.commit()
-        total_deleted += deleted
-        if deleted < batch_size:
-            break
-
-    return total_deleted
+        db.refresh(user)
+    return user
 
 
 def schedule_token_cleanup():
@@ -2107,32 +1980,6 @@ def create_attachment(
 def get_attachments_for_case(db: Session, case_id: int) -> List[Attachment]:
     """Get all attachments for a case"""
     return db.query(Attachment).filter(Attachment.case_id == case_id).all()
-
-
-def is_token_revoked(db: Session, jti: str) -> bool:
-    """Check if token JTI is in the revocation blacklist"""
-    return db.query(RevokedToken).filter(RevokedToken.jti == jti).first() is not None
-
-
-def revoke_token(db: Session, jti: str, expires_at: dt.datetime) -> RevokedToken:
-    """Add a token JTI to the revocation blacklist"""
-    token = RevokedToken(jti=jti, expires_at=expires_at)
-    db.add(token)
-    db.commit()
-    db.refresh(token)
-    return token
-
-def aggregate_model_performance(db: Session, task: str = None) -> list:
-    return []
-
-
-
-def cleanup_expired_revoked_tokens(db: Session) -> int:
-    """Remove expired tokens from the blacklist"""
-    now = dt.datetime.now(dt.timezone.utc)
-    deleted = db.query(RevokedToken).filter(RevokedToken.expires_at < now).delete(synchronize_session=False)
-    db.commit()
-    return deleted
 
 
 def submit_similarity_feedback(

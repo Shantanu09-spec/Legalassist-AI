@@ -285,16 +285,27 @@ class ContextTask(Task):
 # Redis URL must be explicitly configured - no silent fallback to localhost
 _redis_env = os.getenv("REDIS_URL")
 if not _redis_env:
-    raise RuntimeError(
-        "REDIS_URL environment variable is required. "
-        "Cannot start with localhost fallback in production."
+    logger.warning(
+        "REDIS_URL not set — Celery background tasks disabled. "
+        "Set REDIS_URL to enable async task processing."
     )
-REDIS_URL = _redis_env
+    # Dummy stub so @celery_app.task decorators and .conf.update() don't crash
+    celery_app = SimpleNamespace()
+    celery_app.conf = SimpleNamespace()
+    celery_app.conf.update = lambda **kw: None
+    celery_app.conf.__setitem__ = lambda k, v: None
+    celery_app.Task = lambda: None
+    celery_app.task = lambda *args, **kwargs: (lambda f: f)
+    celery_app.AsyncResult = lambda *args, **kwargs: SimpleNamespace(state="PENDING", result=None, status="PENDING")
+    celery_app.main = "legalassist"
+    REDIS_URL = ""
+else:
+    REDIS_URL = _redis_env
 
-# Initialize the Celery application instance
-celery_app = Celery(
-    "legalassist", broker=REDIS_URL, backend=REDIS_URL, task_cls=ContextTask
-)
+    # Initialize the Celery application instance
+    celery_app = Celery(
+        "legalassist", broker=REDIS_URL, backend=REDIS_URL, task_cls=ContextTask
+    )
 
 
 # ============================================================================
@@ -485,8 +496,17 @@ def analyze_document_task(
         Dict[str, Any]: The structured analysis results including identified remedies.
     """
     # Idempotency: prevent duplicate processing for same user/document
+    # Include a content hash so re-uploading an updated document triggers
+    # a new analysis even when user_id and document_id are the same.
+    content_parts = []
+    if file_bytes:
+        content_parts.append(hashlib.sha256(file_bytes).hexdigest())
+    if text:
+        content_parts.append(hashlib.sha256(text.encode("utf-8")).hexdigest())
+    content_hash = hashlib.sha256("|".join(content_parts).encode()).hexdigest()[:16] if content_parts else ""
+
     idemp = IdempotencyManager()
-    idempotency_key = f"analyze:{user_id}:{document_id}"
+    idempotency_key = f"analyze:{user_id}:{document_id}:{content_hash}"
     if not idemp.acquire(idempotency_key, ttl=300):
         # Another worker is processing or has processed this key
         existing = idemp.get_result(idempotency_key)
@@ -514,18 +534,27 @@ def analyze_document_task(
         )
         
         extracted_text = text
+        if extracted_text:
+            if len(extracted_text.encode("utf-8")) > ValidationConfig.MAX_TEXT_LENGTH:
+                raise ValueError(f"Input text exceeds max limit of {ValidationConfig.MAX_TEXT_LENGTH} bytes.")
         if not extracted_text and file_bytes:
+            if len(file_bytes) > ValidationConfig.MAX_TEXT_LENGTH:
+                raise ValueError(f"File too large: {len(file_bytes)} bytes exceeds limit of {ValidationConfig.MAX_TEXT_LENGTH} bytes.")
             extracted_text = extract_text_from_pdf(io.BytesIO(file_bytes))
         if not extracted_text:
             if file_url:
                 response = requests.get(file_url, timeout=30)
                 response.raise_for_status()
+                if len(response.content) > ValidationConfig.MAX_TEXT_LENGTH:
+                    raise ValueError(f"Downloaded file too large: {len(response.content)} bytes exceeds limit of {ValidationConfig.MAX_TEXT_LENGTH} bytes.")
                 content_type = response.headers.get("Content-Type", "")
                 if "application/pdf" in content_type or file_url.lower().endswith(".pdf"):
                     extracted_text = extract_text_from_pdf(io.BytesIO(response.content))
                 else:
                     extracted_text = response.content.decode("utf-8", errors="ignore")
             elif file_path:
+                if os.path.getsize(file_path) > ValidationConfig.MAX_TEXT_LENGTH:
+                    raise ValueError(f"File too large: {os.path.getsize(file_path)} bytes exceeds limit of {ValidationConfig.MAX_TEXT_LENGTH} bytes.")
                 if file_path.lower().endswith(".pdf"):
                     with open(file_path, "rb") as f:
                         extracted_text = extract_text_from_pdf(io.BytesIO(f.read()))
