@@ -67,16 +67,24 @@ from typing import Optional
 from contextlib import contextmanager
 
 import pytz
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.triggers.cron import CronTrigger
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.schedulers.blocking import BlockingScheduler
+    from apscheduler.triggers.cron import CronTrigger
 
-# PERSISTENCE & CONCURRENCY IMPORTS
-# ------------------------------------------------------------------------------
-# SQLAlchemyJobStore allows us to store job metadata in our primary database.
-# ThreadPoolExecutor manages a pool of threads to handle concurrent I/O tasks.
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-from apscheduler.executors.pool import ThreadPoolExecutor, ProcessPoolExecutor
+    # PERSISTENCE & CONCURRENCY IMPORTS
+    # ------------------------------------------------------------------------------
+    # SQLAlchemyJobStore allows us to store job metadata in our primary database.
+    # ThreadPoolExecutor manages a pool of threads to handle concurrent I/O tasks.
+    from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+    from apscheduler.executors.pool import ThreadPoolExecutor, ProcessPoolExecutor
+except Exception:
+    BackgroundScheduler = None
+    BlockingScheduler = None
+    CronTrigger = None
+    SQLAlchemyJobStore = None
+    ThreadPoolExecutor = None
+    ProcessPoolExecutor = None
 
 # APPLICATION-SPECIFIC IMPORTS
 # ------------------------------------------------------------------------------

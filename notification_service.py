@@ -24,6 +24,17 @@ except Exception:
     celery_app = None
 
 
+if celery_app is None:
+    class _FallbackCeleryApp:
+        def task(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+    celery_app = _FallbackCeleryApp()
+
+
 from sqlalchemy.orm import Session
 
 # Email and SMS Libraries
@@ -558,7 +569,7 @@ class NotificationService:
         if message is None:
             message = self.build_sms_message(deadline.case_title, days_left, deadline.deadline_date)
         # Idempotency: create a pending log row or get existing one
-        log = get_or_create_notification_log(
+        log, created = get_or_create_notification_log(
             db=db,
             deadline_id=deadline.id,
             user_id=deadline.user_id,
@@ -567,8 +578,8 @@ class NotificationService:
             days_before=days_left,
         )
 
-        # If already sent, skip
-        if log.status in (NotificationStatus.SENT, NotificationStatus.OPENED):
+        # If another worker already claimed the reminder, skip sending.
+        if not created or log.status in (NotificationStatus.SENT, NotificationStatus.OPENED):
             return NotificationResult(
                 success=False,
                 channel=NotificationChannel.SMS,
@@ -675,7 +686,7 @@ class NotificationService:
         # We use .delay() to send the task to the Redis broker. 
         # The background worker will pick it up and execute it.
         # Idempotency: create or get pending log row
-        log = get_or_create_notification_log(
+        log, created = get_or_create_notification_log(
             db=db,
             deadline_id=deadline.id,
             user_id=deadline.user_id,
@@ -684,7 +695,7 @@ class NotificationService:
             days_before=days_left,
         )
 
-        if log.status in (NotificationStatus.SENT, NotificationStatus.OPENED):
+        if not created or log.status in (NotificationStatus.SENT, NotificationStatus.OPENED):
             return NotificationResult(
                 success=False,
                 channel=NotificationChannel.EMAIL,
