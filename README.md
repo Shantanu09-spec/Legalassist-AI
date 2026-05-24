@@ -283,5 +283,3 @@ See [ANALYTICS.md](ANALYTICS.md) for:
 - Database schema
 - Sample data generation
 - Integration examples
-
-
