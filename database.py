@@ -5,7 +5,7 @@ Uses SQLAlchemy ORM with SQLite for persistence.
 
 import datetime as dt
 import logging
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from sqlalchemy import (
     create_engine,
     Column,
@@ -122,7 +122,9 @@ class UserPreference(Base):
 class NotificationLog(Base):
     """Model for tracking sent notifications"""
     __tablename__ = "notification_logs"
-
+    __table_args__ = (
+        UniqueConstraint("deadline_id", "days_before", "channel", name="uq_notification_deadline_days_channel"),
+    )
     id = Column(Integer, primary_key=True)
     deadline_id = Column(Integer, ForeignKey("case_deadlines.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -1168,6 +1170,94 @@ def log_notification(
     db.commit()
     db.refresh(log)
     return log
+
+
+def reserve_notification(
+    db: Session,
+    deadline_id: int,
+    user_id: int,
+    channel: NotificationChannel,
+    recipient: str,
+    days_before: int,
+    message_preview: Optional[str] = None,
+) -> Tuple[NotificationLog, bool]:
+    """Attempt to reserve a notification slot by inserting a PENDING record.
+
+    Returns tuple (NotificationLog, created_bool). If created_bool is False,
+    an existing log was found and reservation failed (another worker reserved it).
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    log = NotificationLog(
+        deadline_id=deadline_id,
+        user_id=user_id,
+        channel=channel,
+        recipient=recipient,
+        days_before=days_before,
+        status=NotificationStatus.PENDING,
+        message_preview=message_preview,
+    )
+    try:
+        db.add(log)
+        db.commit()
+        db.refresh(log)
+        return log, True
+    except IntegrityError:
+        db.rollback()
+        existing = db.query(NotificationLog).filter(
+            NotificationLog.deadline_id == deadline_id,
+            NotificationLog.days_before == days_before,
+            NotificationLog.channel == channel,
+        ).first()
+        return existing, False
+
+
+def update_notification_result(
+    db: Session,
+    deadline_id: int,
+    user_id: int,
+    days_before: int,
+    channel: NotificationChannel,
+    status: NotificationStatus,
+    message_id: Optional[str] = None,
+    error_message: Optional[str] = None,
+    message_preview: Optional[str] = None,
+) -> NotificationLog:
+    """Update an existing notification log if present, otherwise create one.
+
+    This function is resilient to races and will upsert the record appropriately.
+    """
+    existing = db.query(NotificationLog).filter(
+        NotificationLog.deadline_id == deadline_id,
+        NotificationLog.days_before == days_before,
+        NotificationLog.channel == channel,
+    ).with_for_update(read=True).first()
+
+    if existing:
+        existing.status = status
+        existing.message_id = message_id or existing.message_id
+        existing.error_message = error_message or existing.error_message
+        existing.message_preview = message_preview or existing.message_preview
+        if status == NotificationStatus.SENT:
+            existing.sent_at = dt.datetime.now(dt.timezone.utc)
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    # Not found - create a new log record
+    return log_notification(
+        db=db,
+        deadline_id=deadline_id,
+        user_id=user_id,
+        channel=channel,
+        recipient="unknown",
+        days_before=days_before,
+        status=status,
+        message_id=message_id,
+        error_message=error_message,
+        message_preview=message_preview,
+    )
 
 
 def get_notification_history(db: Session, user_id: int, limit: int = 50) -> List[NotificationLog]:

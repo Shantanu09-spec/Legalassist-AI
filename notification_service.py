@@ -43,6 +43,8 @@ from database import (
     CaseDeadline,
     log_notification,
     has_notification_been_sent,
+    reserve_notification,
+    update_notification_result,
     get_notification_template_for_user,
 )
 from core.template_renderer import render_template, validate_template, TemplateValidationError
@@ -77,7 +79,12 @@ class SMSClient:
             logger.warning("Twilio credentials not configured. SMS will be mocked.")
             self.client = None
         else:
-            self.client = TwilioClient(self.account_sid, self.auth_token)
+            # Ensure Twilio library is available
+            if TwilioClient is None:
+                logger.warning("Twilio library not installed. SMS will be mocked.")
+                self.client = None
+            else:
+                self.client = TwilioClient(self.account_sid, self.auth_token)
 
     def send_sms(self, to_number: str, message: str) -> Tuple[bool, Optional[str], Optional[str]]:
         """
@@ -123,7 +130,12 @@ class EmailClient:
             logger.warning("SendGrid API key not configured. Emails will be mocked.")
             self.client = None
         else:
-            self.client = SendGridAPIClient(self.api_key)
+            # Ensure SendGrid library is available
+            if SendGridAPIClient is None:
+                logger.warning("SendGrid library not installed. Emails will be mocked.")
+                self.client = None
+            else:
+                self.client = SendGridAPIClient(self.api_key)
 
     def send_email(self, to_email: str, subject: str, html_content: str) -> Tuple[bool, Optional[str], Optional[str]]:
         """
@@ -199,7 +211,7 @@ def send_email_task(
     Returns:
         dict: A summary of the operation results.
     """
-    from database import db_session, log_notification, NotificationStatus, NotificationChannel
+    from database import db_session, NotificationStatus, NotificationChannel, update_notification_result
     
     logger.info(
         "Starting background email delivery", 
@@ -219,27 +231,24 @@ def send_email_task(
     # Determine the status for database logging
     status = NotificationStatus.SENT if success else NotificationStatus.FAILED
     
-    # If logging metadata was provided, persist the result to the database
+    # Update existing pending reservation (if present) or create a log
     if deadline_id is not None and user_id is not None and days_left is not None:
         try:
-            # We use the db_session context manager to ensure the connection 
-            # is properly closed and the transaction is committed.
             with db_session() as db:
-                log_notification(
+                update_notification_result(
                     db=db,
                     deadline_id=deadline_id,
                     user_id=user_id,
-                    channel=NotificationChannel.EMAIL,
-                    recipient=to_email,
                     days_before=days_left,
-                    status=status,
+                    channel=NotificationChannel.EMAIL,
+                    status=NotificationStatus.SENT if success else NotificationStatus.FAILED,
                     message_id=message_id,
                     error_message=error,
                     message_preview=html_content,
                 )
-                logger.info("Background notification logged successfully", deadline_id=deadline_id)
+                logger.info("Background notification result updated", deadline_id=deadline_id)
         except Exception as e:
-            logger.error("Failed to log background notification", error=str(e), deadline_id=deadline_id)
+            logger.error("Failed to update background notification", error=str(e), deadline_id=deadline_id)
     
     # Handle retries if the email failed and we haven't exceeded the limit.
     # We only retry for potentially transient errors.
@@ -413,17 +422,32 @@ class NotificationService:
 
         if message is None:
             message = self.build_sms_message(deadline.case_title, days_left, deadline.deadline_date)
-        success, message_id, error = self.sms_client.send_sms(user_preference.phone_number, message)
-
-        status = NotificationStatus.SENT if success else NotificationStatus.FAILED
-
-        log_notification(
+        # Reserve a notification slot to avoid races
+        reserved_log, created = reserve_notification(
             db=db,
             deadline_id=deadline.id,
             user_id=deadline.user_id,
             channel=NotificationChannel.SMS,
             recipient=user_preference.phone_number,
             days_before=days_left,
+            message_preview=message,
+        )
+
+        if not created:
+            logger.debug("SMS reservation already exists; skipping send", deadline_id=deadline.id, days_before=days_left)
+            return NotificationResult(success=False, channel=NotificationChannel.SMS, recipient=user_preference.phone_number, error="already_reserved")
+
+        success, message_id, error = self.sms_client.send_sms(user_preference.phone_number, message)
+
+        status = NotificationStatus.SENT if success else NotificationStatus.FAILED
+
+        # Update the reserved record with the final result
+        update_notification_result(
+            db=db,
+            deadline_id=deadline.id,
+            user_id=deadline.user_id,
+            days_before=days_left,
+            channel=NotificationChannel.SMS,
             status=status,
             message_id=message_id,
             error_message=error,
@@ -487,26 +511,51 @@ class NotificationService:
         # ====================================================================
         
         logger.info(
-            "Offloading email delivery to background task", 
+            "Offloading email delivery to background task",
             user_id=deadline.user_id,
             deadline_id=deadline.id,
-            days_left=days_left
+            days_left=days_left,
         )
-        
-        # We use .delay() to send the task to the Redis broker. 
-        # The background worker will pick it up and execute it.
+
+        # Reserve a notification slot first to avoid concurrent sends
+        reserved_log, created = reserve_notification(
+            db=db,
+            deadline_id=deadline.id,
+            user_id=deadline.user_id,
+            channel=NotificationChannel.EMAIL,
+            recipient=user_preference.email,
+            days_before=days_left,
+            message_preview=html_content,
+        )
+
+        if not created:
+            logger.debug("Email reservation already exists; skipping send", deadline_id=deadline.id, days_left=days_left)
+            return NotificationResult(success=False, channel=NotificationChannel.EMAIL, recipient=user_preference.email, error="already_reserved")
+
         task_result = send_email_task.delay(
             to_email=user_preference.email,
             subject=subject,
             html_content=html_content,
             deadline_id=deadline.id,
             user_id=deadline.user_id,
-            days_left=days_left
+            days_left=days_left,
         )
-        
-        # We return a successful NotificationResult immediately, noting 
-        # that the message ID is the Celery Task ID until the actual 
-        # email is processed.
+
+        # Update the reserved log with task id as message_id (still PENDING until background updates)
+        try:
+            update_notification_result(
+                db=db,
+                deadline_id=deadline.id,
+                user_id=deadline.user_id,
+                days_before=days_left,
+                channel=NotificationChannel.EMAIL,
+                status=NotificationStatus.PENDING,
+                message_id=f"task_{task_result.id}",
+                message_preview=html_content,
+            )
+        except Exception:
+            logger.exception("Failed to annotate reserved email with task id")
+
         return NotificationResult(
             success=True,
             channel=NotificationChannel.EMAIL,
