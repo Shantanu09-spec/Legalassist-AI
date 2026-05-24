@@ -1,6 +1,7 @@
 
 import pytest
 from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from sqlalchemy import event
 from sqlalchemy import create_engine
@@ -85,6 +86,69 @@ class TestSchedulerComprehensive:
             
             # Verify it called send_reminders 4 times (once per threshold)
             assert mock_send_reminders.call_count == 4
+
+    def test_check_and_send_reminders_continues_after_send_failure(self):
+        """Test that one deadline failure does not stop later deadlines from being processed."""
+        now = datetime.now(timezone.utc)
+
+        deadlines = [
+            SimpleNamespace(id=1, user_id=1, case_id=101, days_until_deadline=lambda: 30),
+            SimpleNamespace(id=2, user_id=2, case_id=102, days_until_deadline=lambda: 30),
+        ]
+        prefs = [
+            SimpleNamespace(user_id=1, timezone="UTC", notification_channel=NotificationChannel.SMS, email="user1@example.com", phone_number="+911000000001", notify_30_days=True, notify_10_days=False, notify_3_days=False, notify_1_day=False),
+            SimpleNamespace(user_id=2, timezone="UTC", notification_channel=NotificationChannel.SMS, email="user2@example.com", phone_number="+911000000002", notify_30_days=True, notify_10_days=False, notify_3_days=False, notify_1_day=False),
+        ]
+
+        class FakeQuery:
+            def __init__(self, results):
+                self._results = results
+
+            def filter(self, *args, **kwargs):
+                return self
+
+            def all(self):
+                return self._results
+
+        class FakeDb:
+            def query(self, model):
+                return FakeQuery(prefs)
+
+            def close(self):
+                return None
+
+        fake_db = FakeDb()
+
+        call_count = {"value": 0}
+
+        def fake_send_reminders(db, deadline, user_preference, days_left):
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                raise RuntimeError("boom")
+            return [
+                NotificationResult(
+                    success=True,
+                    channel=NotificationChannel.SMS,
+                    recipient=user_preference.phone_number,
+                    message_id="sms_123",
+                    error=None,
+                )
+            ]
+
+        with patch("scheduler.init_db"), \
+             patch("scheduler.SessionLocal", return_value=fake_db), \
+             patch("scheduler.get_upcoming_deadlines", return_value=deadlines), \
+             patch("scheduler.notification_service.send_reminders", side_effect=fake_send_reminders) as mock_send_reminders, \
+             patch("scheduler.is_reminder_time_for_user", return_value=True), \
+             patch("scheduler.logger.error") as mock_error:
+            check_and_send_reminders()
+
+        assert mock_send_reminders.call_count == 2
+        assert mock_error.call_count == 1
+        assert mock_error.call_args.kwargs["deadline_id"] is not None
+        assert mock_error.call_args.kwargs["user_id"] is not None
+        assert mock_error.call_args.kwargs["days_left"] == 30
+        assert "boom" in mock_error.call_args.kwargs["error"]
 
     def test_check_and_send_reminders_bulk_prefetch_avoids_n_plus_one(self, test_db):
         """Test that preference lookup stays bulk even with many deadlines."""

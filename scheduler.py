@@ -206,6 +206,22 @@ def _shutdown_scheduler_instance(scheduler, *, wait: bool = True):
         logger.error("scheduler_shutdown_failed", error=sanitize_log_text(str(e)))
 
 
+def _send_deadline_reminders_safe(db, deadline, user_preference, days_left):
+    """Send reminders for one deadline and isolate notification service failures."""
+    try:
+        return notification_service.send_reminders(db, deadline, user_preference, days_left)
+    except Exception as exc:
+        logger.error(
+            "scheduler_notification_dispatch_failed",
+            deadline_id=getattr(deadline, "id", None),
+            user_id=getattr(deadline, "user_id", None),
+            days_left=days_left,
+            error=sanitize_log_text(str(exc)),
+            exc_info=True,
+        )
+        return []
+
+
 # Reminder time logic moved to notifications.reminder_engine.build_reminder_jobs
 
 
@@ -320,7 +336,7 @@ def check_and_send_reminders():
                 logger.info("scheduler_processing_deadline", case_id=deadline.case_id, days_left=days_left)
 
                 # Send reminders using the notification service
-                results = notification_service.send_reminders(db, deadline, user_preference, days_left)
+                results = _send_deadline_reminders_safe(db, deadline, user_preference, days_left)
 
                 for res in results:
                     if res.success:
@@ -766,7 +782,7 @@ def check_reminders_sync(target_days: Optional[int] = None, db: Optional[object]
                 continue
 
             # Send reminders
-            results = notification_service.send_reminders(db, deadline, candidate.user_preference, days_left)
+            results = _send_deadline_reminders_safe(db, deadline, candidate.user_preference, days_left)
             sent_count += len([r for r in results if r.success])
 
         logger.info("scheduler_sync_reminder_check_completed", reminders_sent=sent_count)
