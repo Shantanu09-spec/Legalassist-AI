@@ -45,6 +45,7 @@ def test_publish_normalizes_datetimes_to_utc_iso():
         await bus.publish(
             7,
             {
+                "schema_version": 2,
                 "type": "timeline_event",
                 "case_id": 7,
                 "event_type": "deadline_created",
@@ -60,6 +61,7 @@ def test_publish_normalizes_datetimes_to_utc_iso():
         payload = await queue.get()
         validated = TimelineEventPayload.model_validate(payload)
         assert set(TimelineEventPayload.model_fields) == {
+            "schema_version",
             "type",
             "case_id",
             "event_type",
@@ -69,6 +71,7 @@ def test_publish_normalizes_datetimes_to_utc_iso():
             "event_id",
         }
         assert set(validated.model_dump(mode="json")) == {
+            "schema_version",
             "type",
             "case_id",
             "event_type",
@@ -77,6 +80,7 @@ def test_publish_normalizes_datetimes_to_utc_iso():
             "metadata",
             "event_id",
         }
+        assert validated.schema_version == TimelineEventPayload.CURRENT_SCHEMA_VERSION
         assert validated.type == "timeline_event"
         assert validated.case_id == 7
         assert validated.event_type == "deadline_created"
@@ -88,20 +92,51 @@ def test_publish_normalizes_datetimes_to_utc_iso():
     asyncio.run(scenario())
 
 
-def test_timeline_event_payload_rejects_extra_fields():
-    with pytest.raises(ValidationError):
-        TimelineEventPayload.model_validate(
-            {
-                "type": "timeline_event",
-                "case_id": 7,
-                "event_type": "deadline_created",
-                "description": "Manual deadline added",
-                "timestamp": datetime(2026, 5, 22, 10, 30, tzinfo=timezone.utc),
-                "metadata": {},
-                "event_id": 555,
-                "unexpected": "value",
-            }
-        )
+def test_timeline_event_payload_accepts_legacy_version_and_ignores_extra_fields():
+    payload = TimelineEventPayload.model_validate(
+        {
+            "type": "timeline_event",
+            "case_id": 7,
+            "event_type": "deadline_created",
+            "description": "Manual deadline added",
+            "timestamp": datetime(2026, 5, 22, 10, 30, tzinfo=timezone.utc),
+            "metadata": {},
+            "event_id": 555,
+            "unexpected": "value",
+        }
+    )
+
+    assert payload.schema_version == TimelineEventPayload.LEGACY_SCHEMA_VERSION
+    assert payload.model_dump(mode="json") == {
+        "schema_version": TimelineEventPayload.LEGACY_SCHEMA_VERSION,
+        "type": "timeline_event",
+        "case_id": 7,
+        "event_type": "deadline_created",
+        "description": "Manual deadline added",
+        "timestamp": "2026-05-22T10:30:00+00:00",
+        "metadata": {},
+        "event_id": 555,
+    }
+
+
+def test_timeline_event_payload_supports_schema_version_two_and_aliases():
+    payload = TimelineEventPayload.model_validate(
+        {
+            "schemaVersion": 2,
+            "type": "timeline_event",
+            "caseId": 7,
+            "eventType": "deadline_created",
+            "description": "Manual deadline added",
+            "timestamp": datetime(2026, 5, 22, 10, 30),
+            "metadata": None,
+            "eventId": 555,
+            "extra": "ignored",
+        }
+    )
+
+    assert payload.schema_version == 2
+    assert payload.metadata == {}
+    assert payload.timestamp == datetime(2026, 5, 22, 10, 30, tzinfo=timezone.utc)
 
 
 def test_publish_rejects_invalid_payload_shape():
@@ -112,6 +147,7 @@ def test_publish_rejects_invalid_payload_shape():
             await bus.publish(
                 7,
                 {
+                    "schema_version": 2,
                     "type": "timeline_event",
                     "case_id": 7,
                     "event_type": "deadline_created",
@@ -136,6 +172,7 @@ def test_publish_keeps_latest_message_when_queue_is_full():
             await bus.publish(
                 7,
                 {
+                    "schema_version": 2,
                     "type": "timeline_event",
                     "case_id": 7,
                     "event_type": "deadline_created",
@@ -148,6 +185,7 @@ def test_publish_keeps_latest_message_when_queue_is_full():
             await bus.publish(
                 7,
                 {
+                    "schema_version": 2,
                     "type": "timeline_event",
                     "case_id": 7,
                     "event_type": "deadline_created",
@@ -163,6 +201,7 @@ def test_publish_keeps_latest_message_when_queue_is_full():
 
             assert validated.description == "Newest message"
             assert validated.event_id == 2
+            assert validated.schema_version == TimelineEventPayload.CURRENT_SCHEMA_VERSION
             assert bus.dropped_messages_total == 1
             assert bus._channels[7].dropped_messages == 1
             assert mock_warning.call_count == 1
