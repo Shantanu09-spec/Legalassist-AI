@@ -202,7 +202,16 @@ timeline_realtime_bus = TimelineRealtimeBus(queue_maxsize=timeline_queue_maxsize
 
 def publish_timeline_event_best_effort(payload: Dict[str, Any]) -> Optional[asyncio.Task[Any]]:
     """Publish a timeline event without depending on the caller's loop state."""
-    case_id = payload["case_id"]
+    case_id = payload.get("case_id")
+    if case_id is None:
+        logger.error(
+            "timeline_realtime_publish_malformed_payload",
+            error_type="KeyError",
+            error="case_id missing",
+            payload_keys=sorted(payload.keys()),
+        )
+        return None
+
     publish_coro = timeline_realtime_bus.publish(case_id=case_id, payload=payload)
 
     def _log_publish_task_failure(task: asyncio.Task[Any]) -> None:

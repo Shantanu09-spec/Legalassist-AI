@@ -367,3 +367,33 @@ def test_publish_timeline_event_best_effort_logs_async_task_failures():
                 assert mock_error.call_args.kwargs["error"] == "boom"
 
     asyncio.run(scenario())
+
+
+def test_publish_timeline_event_best_effort_handles_missing_case_id():
+    with patch("services.timeline_realtime.logger.error") as mock_error:
+        result = publish_timeline_event_best_effort(
+            {
+                "schema_version": 2,
+                "type": "timeline_event",
+                "event_type": "deadline_created",
+                "description": "Malformed payload",
+                "timestamp": datetime(2026, 5, 22, 10, 30, tzinfo=timezone.utc),
+                "metadata": {},
+                "event_id": 555,
+            }
+        )
+
+        assert result is None
+        assert mock_error.call_count == 1
+        assert mock_error.call_args.args[0] == "timeline_realtime_publish_malformed_payload"
+        assert mock_error.call_args.kwargs["error_type"] == "KeyError"
+        assert mock_error.call_args.kwargs["error"] == "case_id missing"
+        assert mock_error.call_args.kwargs["payload_keys"] == [
+            "description",
+            "event_id",
+            "event_type",
+            "metadata",
+            "schema_version",
+            "timestamp",
+            "type",
+        ]
