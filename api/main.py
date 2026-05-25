@@ -350,6 +350,7 @@ if settings.ENABLE_WEBSOCKET:
     from celery_app import TaskStatus
     from api.auth import AuthError, TokenExpiredError, InvalidTokenError
     from api.job_registry import get_job_owner
+    from urllib.parse import urlparse
     
     @app.websocket("/ws/progress/{job_id}")
     async def websocket_progress_endpoint(
@@ -361,6 +362,24 @@ if settings.ENABLE_WEBSOCKET:
         
         Requires authentication via Sec-WebSocket-Protocol header.
         """
+        # Validate Origin header against allowed origins (CSRF protection)
+        origin = websocket.headers.get("origin") or websocket.headers.get("Origin")
+        if origin:
+            try:
+                parsed = urlparse(origin)
+                origin_host = parsed.hostname or ""
+            except Exception:
+                origin_host = ""
+            allowed = list(settings.CORS_ORIGINS) if isinstance(settings.CORS_ORIGINS, list) else []
+            allowed_hosts = list(settings.ALLOWED_HOSTS) if isinstance(settings.ALLOWED_HOSTS, list) else []
+            if not any(
+                origin_host == h or origin_host == urlparse(h).hostname
+                for h in (allowed + allowed_hosts)
+                if h and h != "*"
+            ):
+                await websocket.close(code=4001, reason="Origin not allowed")
+                return
+        
         auth_token = None
         requested_protocols = []
         
