@@ -33,6 +33,7 @@ class ShardedVectorStore:
                 'ids': [],  # list of case_ids
                 'vectors': np.zeros((0, self.dimension), dtype=np.float32),
                 'id_to_index': {},
+                'metadatas': {},  # id -> metadata
             }
             self._locks[s] = Lock()
 
@@ -74,10 +75,14 @@ class ShardedVectorStore:
                         id_to_index[cid] = vectors.shape[0]
                         vectors = np.vstack([vectors, new_vectors[i:i+1]])
                         ids.append(cid)
+                        # store metadata placeholder if not present
+                        if cid not in shard_data['metadatas']:
+                            shard_data['metadatas'][cid] = {}
 
                 shard_data['vectors'] = vectors
                 shard_data['ids'] = ids
                 shard_data['id_to_index'] = id_to_index
+                shard_data['metadatas'] = shard_data.get('metadatas', {})
 
                 # Persist shard metadata to disk for durability
                 self._persist_shard(shard)
@@ -87,6 +92,14 @@ class ShardedVectorStore:
         shard_data = self._shards[shard]
         try:
             np.savez_compressed(shard_path, vectors=shard_data['vectors'], ids=np.array(shard_data['ids'], dtype=np.int64))
+            # persist metadata separately
+            meta_path = os.path.join(STORAGE_DIR, f"shard_{shard}_meta.json")
+            try:
+                import json
+                with open(meta_path, 'w', encoding='utf-8') as f:
+                    json.dump({str(k): v for k, v in shard_data.get('metadatas', {}).items()}, f)
+            except Exception:
+                pass
         except Exception as e:
             logger.exception("Failed to persist shard %s: %s", shard, e)
 
@@ -99,9 +112,57 @@ class ShardedVectorStore:
             vectors = data['vectors']
             ids = data['ids'].tolist()
             id_to_index = {int(cid): i for i, cid in enumerate(ids)}
+            # load metadata if present
+            meta_path = os.path.join(STORAGE_DIR, f"shard_{shard}_meta.json")
+            metadatas = {}
+            if os.path.exists(meta_path):
+                try:
+                    import json
+                    with open(meta_path, 'r', encoding='utf-8') as f:
+                        raw = json.load(f)
+                        metadatas = {int(k): v for k, v in raw.items()}
+                except Exception:
+                    metadatas = {}
+
             self._shards[shard]['vectors'] = vectors
             self._shards[shard]['ids'] = ids
             self._shards[shard]['id_to_index'] = id_to_index
+            self._shards[shard]['metadatas'] = metadatas
+
+    def set_metadata(self, case_id: int, metadata: Dict[str, Any]):
+        shard = self.shard_for_id(case_id)
+        with self._locks[shard]:
+            self._shards[shard]['metadatas'][case_id] = metadata
+            self._persist_shard(shard)
+
+    def similarity_search_with_score(self, query: str, k: int = 10):
+        """Search by query string using an attached embedder if available.
+
+        Returns list of (DocumentLike, score) where DocumentLike has `page_content` and `metadata`.
+        """
+        if not hasattr(self, 'embedder') or self.embedder is None:
+            raise RuntimeError('No embedder attached to vector store for similarity_search_with_score')
+        qvec = None
+        try:
+            qvec = self.embedder.embed_query(query)
+        except Exception:
+            try:
+                qvec = self.embedder.embed_documents([query])[0]
+            except Exception as e:
+                raise
+
+        results = self.search(qvec, top_k=k)
+        # convert to Document-like objects
+        out = []
+        for cid, score in results:
+            meta = self._shards[self.shard_for_id(cid)]['metadatas'].get(cid, {})
+            class Doc:
+                def __init__(self, content, metadata):
+                    self.page_content = content
+                    self.metadata = metadata
+            content = meta.get('excerpt', '')
+            out.append((Doc(content, meta), score))
+        return out
 
     def search(self, query_vec: List[float], top_k: int = 10, shard_ids: Optional[List[int]] = None) -> List[Tuple[int, float]]:
         """Search nearest neighbors across selected shards (or all shards).
