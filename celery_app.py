@@ -16,6 +16,7 @@ Author: Antigravity AI
 Date: 2026-05-12
 """
 
+import hashlib
 import os
 import uuid
 import structlog
@@ -116,6 +117,8 @@ from core.app_utils import (
     compress_text,
 )
 from api.validation import ValidationConfig
+from db.crud.reports import update_report_status
+from db.session import db_session
 from database import Attachment, SessionLocal, get_case_by_id, get_case_document_by_id, update_case_document, create_timeline_event
 
 # ============================================================================
@@ -830,7 +833,6 @@ def generate_report_task(
     Returns:
         Dict[str, Any]: Metadata about the generated report file.
     """
-    from db.session import db_session
     from db.models.reports import Report
 
     # Update status to processing in DB
@@ -864,13 +866,13 @@ def generate_report_task(
 
     try:
         # Mark task as started in DB
-        db = next(get_db())
-        update_report_status(
-            db,
-            report_id,
-            status="processing",
-            started_at=datetime.utcnow()
-        )
+        with db_session() as db:
+            update_report_status(
+                db,
+                report_id,
+                status="processing",
+                started_at=datetime.utcnow(),
+            )
         
         # Step 1: Data Aggregation
         self.update_state(
@@ -921,15 +923,15 @@ def generate_report_task(
 
         # Update Report record with completion details
         file_path_str = str(generated.file_path)
-        db = next(get_db())
-        update_report_status(
-            db,
-            report_id,
-            status="completed",
-            file_path=file_path_str,
-            file_size_bytes=generated.file_size_bytes,
-            completed_at=datetime.utcnow()
-        )
+        with db_session() as db:
+            update_report_status(
+                db,
+                report_id,
+                status="completed",
+                file_path=file_path_str,
+                file_size_bytes=generated.file_size_bytes,
+                completed_at=datetime.utcnow(),
+            )
 
         # Prepare the result metadata for the frontend
         result = {
@@ -962,14 +964,14 @@ def generate_report_task(
     except Exception as e:
         # Mark report as failed in DB
         try:
-            db = next(get_db())
-            update_report_status(
-                db,
-                report_id,
-                status="failed",
-                error_message=str(e),
-                completed_at=datetime.utcnow()
-            )
+            with db_session() as db:
+                update_report_status(
+                    db,
+                    report_id,
+                    status="failed",
+                    error_message=str(e),
+                    completed_at=datetime.utcnow(),
+                )
         except Exception as db_err:
             logger.error("Failed to update report status on error", report_id=report_id, db_error=str(db_err))
         
