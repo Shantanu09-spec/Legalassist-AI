@@ -45,6 +45,7 @@ class APISettings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 24
     API_KEY_HEADER: str = "X-API-Key"
+    CSRF_SECRET: str = ""
     
     # Database
     DATABASE_URL: str = os.getenv(
