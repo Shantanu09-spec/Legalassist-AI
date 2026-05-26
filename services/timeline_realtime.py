@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Dict, Set
+from typing import Any, Dict, Optional, Set
 
 import structlog
 
@@ -12,6 +13,59 @@ from core.timeline_payloads import TimelineEventPayload
 
 
 logger = structlog.get_logger(__name__)
+
+_TIMELINE_RATE_LIMIT_MAX = int(os.getenv("TIMELINE_REALTIME_RATE_LIMIT", "30"))
+_TIMELINE_RATE_LIMIT_WINDOW = int(os.getenv("TIMELINE_REALTIME_RATE_WINDOW", "60"))
+
+_REDIS_URL = os.getenv("REDIS_URL", "")
+
+
+def _new_redis_client() -> Optional[Any]:
+    if not _REDIS_URL:
+        return None
+    try:
+        import redis as _redis_mod
+        return _redis_mod.from_url(_REDIS_URL, decode_responses=True)
+    except Exception:
+        logger.warning("timeline_realtime_redis_unavailable")
+        return None
+
+
+class _SlidingWindowRateLimiter:
+    """Per-case publish rate limiter with Redis-backed shared state for multi-worker."""
+
+    def __init__(self) -> None:
+        self._redis: Optional[Any] = _new_redis_client()
+        self._local: Dict[int, list] = {}
+
+    def allow(self, case_id: int) -> bool:
+        now = time.time()
+        key = f"tl_rl:{case_id}"
+
+        if self._redis is not None:
+            window_start = now - _TIMELINE_RATE_LIMIT_WINDOW
+            try:
+                pipe = self._redis.pipeline()
+                pipe.zremrangebyscore(key, 0, window_start)
+                pipe.zcard(key)
+                count = pipe.execute()[1]
+                if count >= _TIMELINE_RATE_LIMIT_MAX:
+                    return False
+                pipe = self._redis.pipeline()
+                pipe.zadd(key, {str(now): now})
+                pipe.expire(key, _TIMELINE_RATE_LIMIT_WINDOW * 2)
+                pipe.execute()
+                return True
+            except Exception:
+                pass
+
+        entries = self._local.setdefault(case_id, [])
+        cutoff = now - _TIMELINE_RATE_LIMIT_WINDOW
+        self._local[case_id] = [t for t in entries if t > cutoff]
+        if len(self._local[case_id]) >= _TIMELINE_RATE_LIMIT_MAX:
+            return False
+        self._local[case_id].append(now)
+        return True
 
 
 @dataclass
@@ -23,11 +77,13 @@ class _CaseChannel:
 
 class TimelineRealtimeBus:
     """
-    Simple in-memory case-scoped pub/sub bus.
+    Simple in-memory case-scoped pub/sub bus with distributed rate limiting.
 
     - Each websocket connection subscribes by providing an asyncio.Queue
     - Writers broadcast a JSON-serializable payload to all subscribers of
       the given case_id.
+    - Publish rate is throttled per case_id using Redis (or in-memory fallback)
+      to prevent subscriber flooding in multi-worker deployments.
     """
 
     def __init__(self, queue_maxsize: int = 100) -> None:
@@ -36,6 +92,7 @@ class TimelineRealtimeBus:
         self._global_lock = asyncio.Lock()
         self._drop_lock = threading.Lock()
         self._dropped_messages_total = 0
+        self._rate_limiter = _SlidingWindowRateLimiter()
 
     @property
     def queue_maxsize(self) -> int:
@@ -123,6 +180,15 @@ class TimelineRealtimeBus:
             self._channels.clear()
 
     async def publish(self, case_id: int, payload: Dict[str, Any]) -> None:
+        if not self._rate_limiter.allow(case_id):
+            logger.warning(
+                "timeline_realtime_publish_rate_limited",
+                case_id=case_id,
+                limit=_TIMELINE_RATE_LIMIT_MAX,
+                window=_TIMELINE_RATE_LIMIT_WINDOW,
+            )
+            return
+
         channel = await self._get_or_create_channel(case_id)
         validated_payload = TimelineEventPayload.model_validate(payload)
         message = validated_payload.model_dump(mode="json")
