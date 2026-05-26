@@ -31,17 +31,22 @@ ACCESS_TOKEN_COOKIE_NAME = "access_token"
 CSRF_SESSION_PREFIX = "csrf_session:"
 
 
+CSRF_TOKEN_V2_PREFIX = "v2:"
+
 def generate_csrf_token(user_id: int, session_id: str) -> str:
     secret = _get_csrf_secret()
     message = f"{user_id}:{session_id}"
     sig = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
-    return f"{session_id}.{sig[:32]}"
+    return f"{CSRF_TOKEN_V2_PREFIX}{session_id}.{sig[:32]}"
 
 
 def validate_csrf_token(token: str, user_id: int) -> bool:
     if not token or "." not in token:
         return False
-    parts = token.rsplit(".", 1)
+    if not token.startswith(CSRF_TOKEN_V2_PREFIX):
+        return False
+    inner = token[len(CSRF_TOKEN_V2_PREFIX):]
+    parts = inner.rsplit(".", 1)
     if len(parts) != 2:
         return False
     session_id, received_sig = parts
