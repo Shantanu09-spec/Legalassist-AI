@@ -120,7 +120,7 @@ from core.app_utils import (
 from api.validation import ValidationConfig
 from db.crud.reports import update_report_status
 from db.session import db_session
-from database import Attachment, SessionLocal, get_case_by_id, get_case_document_by_id, update_case_document, create_timeline_event
+from database import Attachment, User, SessionLocal, get_case_by_id, get_case_document_by_id, update_case_document, create_timeline_event
 
 # ============================================================================
 # INITIALIZATION & LOGGING
@@ -1346,7 +1346,13 @@ def export_data_task(
         raise
 
 
-@celery_app.task(bind=True, name="send_notification")
+@celery_app.task(
+    bind=True,
+    name="send_notification",
+    max_retries=3,
+    default_retry_delay=60,
+    queue="notifications",
+)
 def send_notification_task(
     self, user_id: str, message: str, notification_type: str = "email"
 ) -> Dict[str, Any]:
@@ -1361,29 +1367,128 @@ def send_notification_task(
     Returns:
         Dict[str, Any]: Success metadata including notification ID.
     """
+    from core.log_redaction import mask_email
+    from notification_service import EmailClient, SMSClient
+
+    notification_id = str(uuid.uuid4())
+    sent_at = datetime.now(timezone.utc)
+
     try:
-        logger.info(
-            "Dispatching notification",
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == int(user_id)).first()
+        finally:
+            db.close()
+
+        if not user:
+            raise ValueError(f"User not found for user_id={user_id}")
+    except Exception as e:
+        logger.error(
+            "Notification user lookup failed",
             user_id=user_id,
             notification_type=notification_type,
+            error=str(e),
         )
+        raise
 
-        # Logic for sending notifications would go here
-        # (e.g., integration with SendGrid, Twilio, or Firebase)
+    logger.info(
+        "Dispatching notification",
+        user_id=user_id,
+        notification_type=notification_type,
+        recipient=mask_email(user.email) if user.email else None,
+    )
 
-        result = {
-            "notification_id": str(uuid.uuid4()),
+    from database import NotificationStatus, NotificationChannel
+
+    def _record_audit(outcome: str, channel: str, msg_id: str | None, err: str | None):
+        try:
+            from db.immutable_audit_log import append_audit_entry
+            append_audit_entry(
+                event_type="notification.sent" if outcome == "success" else "notification.failed",
+                action="sent" if outcome == "success" else "failed",
+                actor_user_id=int(user_id),
+                resource_type="notification",
+                resource_id=f"{channel}:{notification_id}",
+                outcome=outcome,
+                metadata={"provider_message_id": msg_id, "error": err, "channel": channel},
+            )
+        except Exception:
+            logger.warning("audit_log_append_failed", notification_id=notification_id)
+
+    if notification_type == "email":
+        if not user.email:
+            _record_audit("failure", "email", None, "no_email_address")
+            raise ValueError(f"User {user_id} has no email address for notification delivery")
+        subject = "LegalAssist AI Notification"
+        client = EmailClient()
+        success, provider_id, error = client.send_email(
+            to_email=user.email,
+            subject=subject,
+            html_content=message,
+        )
+        if not success:
+            _record_audit("failure", "email", provider_id, error)
+            if self.request.retries < self.max_retries:
+                raise self.retry(exc=RuntimeError(f"Email delivery failed: {error}"))
+            raise RuntimeError(f"Email delivery failed after {self.max_retries} retries")
+        _record_audit("success", "email", provider_id, None)
+        logger.info("notification_delivered", user_id=user_id, channel="email", provider_message_id=provider_id)
+        return {
+            "notification_id": notification_id,
             "user_id": user_id,
-            "type": notification_type,
-            "status": "dispatched",
-            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "type": "email",
+            "provider_message_id": provider_id,
+            "status": "delivered",
+            "sent_at": sent_at.isoformat(),
         }
 
-        return result
+    elif notification_type == "sms":
+        from db.models.notifications import UserPreference
+        db = SessionLocal()
+        try:
+            pref = db.query(UserPreference).filter(UserPreference.user_id == int(user_id)).first()
+            phone = pref.phone_number if pref else None
+        finally:
+            db.close()
+        if not phone:
+            _record_audit("failure", "sms", None, "no_phone_number")
+            raise ValueError(f"User {user_id} has no phone number configured for SMS delivery")
+        client = SMSClient()
+        success, provider_id, error = client.send_sms(
+            to_number=phone,
+            message=message,
+        )
+        if not success:
+            _record_audit("failure", "sms", provider_id, error)
+            if self.request.retries < self.max_retries:
+                raise self.retry(exc=RuntimeError(f"SMS delivery failed: {error}"))
+            raise RuntimeError(f"SMS delivery failed after {self.max_retries} retries")
+        _record_audit("success", "sms", provider_id, None)
+        logger.info("notification_delivered", user_id=user_id, channel="sms", provider_message_id=provider_id)
+        return {
+            "notification_id": notification_id,
+            "user_id": user_id,
+            "type": "sms",
+            "provider_message_id": provider_id,
+            "status": "delivered",
+            "sent_at": sent_at.isoformat(),
+        }
 
-    except Exception as e:
-        logger.error("Notification delivery failed", user_id=user_id, error=str(e))
-        raise
+    elif notification_type == "push":
+        logger.warning(
+            "Push notification not supported",
+            user_id=user_id,
+        )
+        return {
+            "notification_id": notification_id,
+            "user_id": user_id,
+            "type": "push",
+            "status": "unsupported",
+            "sent_at": sent_at.isoformat(),
+        }
+
+    else:
+        raise ValueError(f"Unsupported notification type: {notification_type}")
 
 
 # ============================================================================
