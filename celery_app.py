@@ -27,7 +27,7 @@ from typing import Dict, Any, Optional
 import io
 import requests
 from types import SimpleNamespace
-from api.validation import validate_file_url
+from api.validation import validate_file_url, fetch_url_safe
 
 try:
     from celery import Celery, Task
@@ -553,8 +553,8 @@ def analyze_document_task(
             extracted_text = extract_text_from_pdf(io.BytesIO(file_bytes))
         if not extracted_text:
             if file_url:
-                validate_file_url(file_url)
-                response = requests.get(file_url, timeout=30)
+                pinned = validate_file_url(file_url)
+                response = fetch_url_safe(pinned, timeout=30)
                 response.raise_for_status()
                 if len(response.content) > ValidationConfig.MAX_TEXT_LENGTH:
                     raise ValueError(f"Downloaded file too large: {len(response.content)} bytes exceeds limit of {ValidationConfig.MAX_TEXT_LENGTH} bytes.")
