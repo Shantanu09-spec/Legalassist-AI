@@ -4,6 +4,10 @@ POST /api/v1/cases/search - Search for similar cases
 POST /api/v1/cases/similarity-feedback - Save similarity feedback
 GET /api/v1/cases/{id}/timeline - Get case timeline
 """
+import csv
+import io
+import re
+from typing import Optional
 from datetime import datetime, timezone, timedelta
 import secrets
 
@@ -39,6 +43,7 @@ from database import (
     CaseDocument,
     Attachment,
     AnonymizedShareToken,
+    get_db,
 )
 from api.dependencies import get_db_rls
 from db.case_service import save_case_note_draft, publish_case_note, get_case_note_history
@@ -54,6 +59,17 @@ from analytics_engine import CaseSimilarityCalculator
 
 router = APIRouter(prefix="/api/v1/cases", tags=["cases"])
 logger = structlog.get_logger(__name__)
+
+EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+PHONE_PATTERN = re.compile(r"(?:(?:\+?\d[\d\s().-]{6,}\d))")
+
+
+def redact_pii(text: Optional[str]) -> Optional[str]:
+    if not isinstance(text, str):
+        return text
+    text = EMAIL_PATTERN.sub("[redacted-email]", text)
+    text = PHONE_PATTERN.sub("[redacted-phone]", text)
+    return text
 
 
 def _build_case_summary_payload(case: Case, latest_doc: CaseDocument | None = None) -> dict:
@@ -444,6 +460,83 @@ async def get_case_timeline(
 
     timeline_events = _timeline_service.get_case_timeline(db, case.id)
     return CaseTimeline.model_validate(_build_case_timeline_payload(case, timeline_events))
+
+
+@router.get(
+    "/{case_id}/timeline/export",
+    summary="Export case timeline events in CSV or JSON format"
+)
+async def export_case_timeline(
+    case_id: str,
+    format: str = Query(..., pattern="^(csv|json)$", description="Export format: csv or json"),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db_rls),
+):
+    """
+    Export case timeline events in a machine-readable format (CSV or JSON).
+    Ensures authorization is enforced and data is PII-free.
+    """
+    logger.info(
+        "Exporting case timeline",
+        case_id=case_id,
+        format=format,
+        user_id=current_user.user_id,
+    )
+
+    case = get_owned_case(case_id, current_user, db)
+
+    timeline_events = _timeline_service.get_case_timeline(db, case.id)
+    payload = _build_case_timeline_payload(case, timeline_events)
+
+    redacted_events = []
+    for event in payload["events"]:
+        redacted_event = CaseEvent(
+            date=event.date,
+            event_type=event.event_type,
+            description=redact_pii(event.description) or "",
+            court=redact_pii(event.court),
+            judge=redact_pii(event.judge),
+            location=redact_pii(event.location),
+            documents=[redact_pii(doc) or "" for doc in event.documents] if event.documents else [],
+        )
+        redacted_events.append(redacted_event)
+
+    if format == "csv":
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["Date", "Event Type", "Description", "Court", "Judge", "Location", "Documents"])
+        for event in redacted_events:
+            date_str = event.date.isoformat() if hasattr(event.date, "isoformat") else str(event.date)
+            docs_str = "; ".join(event.documents) if event.documents else ""
+            writer.writerow([
+                date_str,
+                event.event_type,
+                event.description,
+                event.court or "",
+                event.judge or "",
+                event.location or "",
+                docs_str
+            ])
+        csv_bytes = buffer.getvalue().encode("utf-8")
+        headers = {
+            "Content-Disposition": f'attachment; filename="case_{case.id}_timeline.csv"'
+        }
+        return Response(content=csv_bytes, media_type="text/csv", headers=headers)
+
+    else:
+        # JSON format
+        redacted_payload = CaseTimeline(
+            case_id=str(case.id),
+            case_number=redact_pii(case.case_number) or "",
+            title=redact_pii(case.title or case.case_number) or "",
+            status=case.status.value if hasattr(case.status, "value") else str(case.status),
+            created_at=case.created_at,
+            updated_at=case.updated_at or case.created_at,
+            events=redacted_events,
+            total_events=len(redacted_events),
+            duration_years=payload["duration_years"],
+        )
+        return redacted_payload
 
 
 @router.get(
