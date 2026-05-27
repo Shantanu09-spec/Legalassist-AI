@@ -89,12 +89,13 @@ class Case(Base):
         "version_id_col": version
     }
 
-    user = relationship("db.models.auth.User", back_populates="cases")
-    documents = relationship("db.models.cases.CaseDocument", back_populates="case", cascade="all, delete-orphan")
-    deadlines = relationship("db.models.cases.CaseDeadline", back_populates="case", cascade="all, delete-orphan")
-    timeline_events = relationship("db.models.cases.CaseTimeline", back_populates="case", cascade="all, delete-orphan")
-    notes = relationship("db.models.cases.CaseNote", back_populates="case", cascade="all, delete-orphan")
-    attachments = relationship("db.models.cases.Attachment", back_populates="case", cascade="all, delete-orphan")
+    user = relationship("User", back_populates="cases")
+    documents = relationship("CaseDocument", back_populates="case", cascade="all, delete-orphan")
+    deadlines = relationship("CaseDeadline", back_populates="case", cascade="all, delete-orphan")
+    timeline_events = relationship("CaseTimeline", back_populates="case", cascade="all, delete-orphan")
+    notes = relationship("CaseNote", back_populates="case", cascade="all, delete-orphan")
+    attachments = relationship("Attachment", back_populates="case", cascade="all, delete-orphan")
+    anonymized_share_tokens = relationship("AnonymizedShareToken", back_populates="case", cascade="all, delete-orphan")
 
 
 class CaseDocument(Base):
@@ -183,4 +184,25 @@ class CaseNoteVersion(Base):
     version_metadata = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), nullable=False)
 
-    note = relationship("db.models.cases.CaseNote", back_populates="versions")
+    note = relationship("CaseNote", back_populates="versions")
+
+
+class AnonymizedShareToken(Base):
+    __tablename__ = "anonymized_share_tokens"
+    __table_args__ = (
+        UniqueConstraint("token", name="uq_anonymized_share_tokens_token"),
+        Index("ix_anonymized_share_tokens_token", "token"),
+        Index("ix_anonymized_share_tokens_case_id", "case_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    token = Column(String(128), nullable=False)
+    case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    anonymized_id = Column(String(64), nullable=False, index=True)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    scope = Column(String(255), nullable=False, default="personal_identifiers")
+    used_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    case = relationship("Case", back_populates="anonymized_share_tokens")
