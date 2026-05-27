@@ -211,7 +211,7 @@ class NotificationChannel(str, enum.Enum):
 class CaseDeadline(Base):
     """Model for case deadlines"""
     __tablename__ = "case_deadlines"
-    __table_args__ = {"extend_existing": True}
+    __table_args__ = {"keep_existing": True}
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -226,7 +226,7 @@ class CaseDeadline(Base):
 
     # Relationships
     case = relationship("Case", back_populates="deadlines")
-    notifications = relationship("NotificationLog", back_populates="deadline", cascade="all, delete-orphan")
+    notifications = relationship("database.NotificationLog", back_populates="deadline", cascade="all, delete-orphan")
     attachments = relationship("Attachment", back_populates="deadline", cascade="all, delete-orphan")
 
     def days_until_deadline(self) -> int:
@@ -245,7 +245,7 @@ class CaseDeadline(Base):
 class UserPreference(Base):
     """Model for user notification preferences"""
     __tablename__ = "user_preferences"
-    __table_args__ = {"extend_existing": True}
+    __table_args__ = {"keep_existing": True}
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
@@ -270,7 +270,7 @@ class UserPreference(Base):
 
 
     # Relationships
-    user = relationship("User", back_populates="preferences")
+    user = relationship("database.User", back_populates="preferences")
 
     def __repr__(self):
         return f"<UserPreference(user_id={self.user_id}, channel={self.notification_channel})>"
@@ -279,9 +279,7 @@ class UserPreference(Base):
 class NotificationLog(Base):
     """Model for tracking sent notifications"""
     __tablename__ = "notification_logs"
-    __table_args__ = (
-        UniqueConstraint("deadline_id", "days_before", "channel", name="uq_notification_deadline_days_channel"),
-    )
+    __table_args__ = {"keep_existing": True}
     id = Column(Integer, primary_key=True)
     deadline_id = Column(Integer, ForeignKey("case_deadlines.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -891,7 +889,7 @@ class Case(Base):
     }
 
     # Relationships
-    user = relationship("User", back_populates="cases")
+    user = relationship("database.User", back_populates="cases")
     documents = relationship("CaseDocument", back_populates="case", cascade="all, delete-orphan", order_by="CaseDocument.uploaded_at")
     deadlines = relationship("CaseDeadline", back_populates="case", cascade="all, delete-orphan")
     timeline_events = relationship("CaseTimeline", back_populates="case", cascade="all, delete-orphan")
@@ -905,7 +903,7 @@ class Case(Base):
 class CaseDocument(Base):
     """Model for storing documents uploaded for a case"""
     __tablename__ = "case_documents"
-    __table_args__ = {"extend_existing": True}
+    __table_args__ = {"keep_existing": True}
 
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -931,7 +929,7 @@ class CaseDocument(Base):
 class Attachment(Base):
     """Model for storing uploaded attachments/evidence linked to cases or deadlines"""
     __tablename__ = "attachments"
-    __table_args__ = {"extend_existing": True}
+    __table_args__ = {"keep_existing": True}
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -954,7 +952,7 @@ class Attachment(Base):
 class CaseTimeline(Base):
     """Model for tracking timeline events in a case"""
     __tablename__ = "case_timeline"
-    __table_args__ = {"extend_existing": True}
+    __table_args__ = {"keep_existing": True}
 
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -986,7 +984,7 @@ class CaseComment(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), onupdate=lambda: dt.datetime.now(dt.timezone.utc))
 
     case = relationship("Case", back_populates="comments")
-    user = relationship("User", back_populates="case_comments")
+    user = relationship("database.User", back_populates="case_comments")
     parent_comment = relationship("CaseComment", remote_side=[id], back_populates="replies")
     replies = relationship("CaseComment", back_populates="parent_comment", cascade="all, delete-orphan")
 
@@ -1009,7 +1007,7 @@ class CasePresence(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), onupdate=lambda: dt.datetime.now(dt.timezone.utc))
 
     case = relationship("Case", back_populates="presence_updates")
-    user = relationship("User", back_populates="case_presence")
+    user = relationship("database.User", back_populates="case_presence")
 
     __table_args__ = (UniqueConstraint("case_id", "user_id", name="uq_case_presence_user"), {"extend_existing": True})
 

@@ -50,7 +50,7 @@ class CaseDeadline(Base):
     is_completed = Column(Boolean, default=False, index=True)
 
     case = relationship("Case", back_populates="deadlines")
-    notifications = relationship("NotificationLog", back_populates="deadline")
+    notifications = relationship("db.models.notifications.NotificationLog", back_populates="deadline")
     attachments = relationship("Attachment", back_populates="deadline")
 
     def days_until_deadline(self) -> int:
@@ -89,7 +89,7 @@ class Case(Base):
         "version_id_col": version
     }
 
-    user = relationship("User", back_populates="cases")
+    user = relationship("db.models.auth.User", back_populates="cases")
     documents = relationship("CaseDocument", back_populates="case", cascade="all, delete-orphan")
     deadlines = relationship("CaseDeadline", back_populates="case", cascade="all, delete-orphan")
     timeline_events = relationship("CaseTimeline", back_populates="case", cascade="all, delete-orphan")

@@ -40,7 +40,7 @@ class UserPreference(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), onupdate=lambda: dt.datetime.now(dt.timezone.utc))
 
-    user = relationship("User", back_populates="preferences")
+    user = relationship("db.models.auth.User", back_populates="preferences")
 
 
 class NotificationTemplate(Base):
