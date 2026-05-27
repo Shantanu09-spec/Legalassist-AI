@@ -6,6 +6,7 @@ This file remains as a stable public API surface for legacy imports.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import enum
 import logging
 from typing import Optional, List, Tuple
@@ -280,6 +281,7 @@ class NotificationLog(Base):
     __tablename__ = "notification_logs"
     __table_args__ = (
         UniqueConstraint("deadline_id", "days_before", "channel", name="uq_notification_deadline_days_channel"),
+        {"extend_existing": True},
     )
     id = Column(Integer, primary_key=True)
     deadline_id = Column(Integer, ForeignKey("case_deadlines.id", ondelete="CASCADE"), nullable=False, index=True)
