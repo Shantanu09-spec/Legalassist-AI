@@ -44,7 +44,6 @@ from database import (
     Attachment,
     AnonymizedShareToken,
     get_db,
-    SimilarityFeedback,
 )
 from api.dependencies import get_db_rls
 from db.case_service import save_case_note_draft, publish_case_note, get_case_note_history
