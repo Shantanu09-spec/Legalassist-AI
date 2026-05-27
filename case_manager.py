@@ -1129,3 +1129,18 @@ def delete_user_cases(user_id: int, case_ids: List[int], confirm: bool = False) 
 # =============================================================================
 # END OF SERVICE
 # =============================================================================
+
+
+def validate_case_transition(current_status: str, target_status: str) -> bool:
+    """
+    Validates if a transition from current case status to target case status 
+    is permitted under standard case lifecycle rules.
+    """
+    allowed_transitions = {
+        "pending": ["active", "dismissed"],
+        "active": ["settled", "dismissed", "appealed"],
+        "appealed": ["active", "dismissed"],
+        "settled": [],
+        "dismissed": []
+    }
+    return target_status in allowed_transitions.get(current_status, [])
