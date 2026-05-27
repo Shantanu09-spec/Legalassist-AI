@@ -57,14 +57,15 @@ from db import (
     UserPreference,
     CaseDeadline,
 )
-from database import get_notification_template_for_user
+from database import (
+    get_notification_template_for_user,
+    reserve_notification,
+    update_notification_result,
+)
 from db.crud.notifications import (
     get_or_create_notification_log,
     update_notification_log_by_keys,
     has_notification_been_sent,
-    reserve_notification,
-    update_notification_result,
-    get_notification_template_for_user,
 )
 from db.crud.audit import record_immutable_audit_event
 from core.template_renderer import render_template, validate_template, TemplateValidationError

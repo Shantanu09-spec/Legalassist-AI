@@ -14,26 +14,31 @@ def get_or_create_notification_log(
     recipient: str,
     days_before: int,
 ) -> tuple[NotificationLog, bool]:
-    """Attempt to create a NotificationLog row uniquely. If another
-    process created it concurrently, fetch and return the existing row.
-    Raises IntegrityError only if unexpected.
+    """Atomically create a NotificationLog row under a savepoint.
+
+    Uses a nested transaction (savepoint) so the unique constraint on
+    (deadline_id, days_before, channel) is enforced immediately via flush,
+    and IntegrityError is caught within the function itself.  Without a
+    savepoint, two concurrent readers can both flush() the same key under
+    READ COMMITTED isolation and both observe a successful insert; the
+    IntegrityError would only surface at the outer commit, outside this
+    function's exception handler.
     """
-    log = NotificationLog(
-        deadline_id=deadline_id,
-        user_id=user_id,
-        channel=channel,
-        recipient=recipient,
-        days_before=days_before,
-        status=NotificationStatus.PENDING,
-    )
-    db.add(log)
     try:
-        db.flush()
+        with db.begin_nested():
+            log = NotificationLog(
+                deadline_id=deadline_id,
+                user_id=user_id,
+                channel=channel,
+                recipient=recipient,
+                days_before=days_before,
+                status=NotificationStatus.PENDING,
+            )
+            db.add(log)
+            db.flush()
         db.refresh(log)
         return log, True
     except IntegrityError:
-        db.rollback()
-        # Fetch the existing log (could be PENDING or SENT)
         existing = db.query(NotificationLog).filter(
             NotificationLog.deadline_id == deadline_id,
             NotificationLog.days_before == days_before,
@@ -41,7 +46,6 @@ def get_or_create_notification_log(
         ).first()
         if existing:
             return existing, False
-        # Re-raise if we couldn't find an existing row
         raise
 
 
