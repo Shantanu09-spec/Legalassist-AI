@@ -60,6 +60,7 @@ import os
 import uuid
 import subprocess
 import shlex
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -115,43 +116,8 @@ logger = structlog.get_logger(__name__)
 _scheduler: Optional[BackgroundScheduler] = None
 _notification_service_instance: Optional[NotificationService] = None
 _instance_id = str(uuid.uuid4())[:8]
-
-
-def _is_truthy_env(name: str, default: str = "0") -> bool:
-    value = os.getenv(name, default)
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-ENABLE_MAINTENANCE_TASKS = _is_truthy_env("ENABLE_MAINTENANCE_TASKS")
-MAINTENANCE_TASK_COMMAND = os.getenv("MAINTENANCE_TASK_COMMAND", "").strip()
-
-
-class _LazyNotificationService:
-    """Lazy proxy that initializes NotificationService on first attribute access."""
-
-    def _ensure(self) -> NotificationService:
-        global _notification_service_instance
-        if _notification_service_instance is None:
-            _notification_service_instance = NotificationService()
-        return _notification_service_instance
-
-    def __getattr__(self, name):
-        return getattr(self._ensure(), name)
-
-
-notification_service = _LazyNotificationService()
-
-
-def get_notification_service() -> NotificationService:
-    """Lazily initialize the notification service singleton."""
-    return notification_service._ensure()
-
-
-# Lock configuration
-LOCK_KEY = "legalassist:scheduler:lock"
-LOCK_TTL_SECONDS = 55 * 60  # 55 minutes to allow hourly job to complete
-KNOWLEDGE_LOCK_KEY = "legalassist:knowledge:lock"
-KNOWLEDGE_LOCK_TTL_SECONDS = 10 * 60
+_in_memory_locks: dict[str, float] = {}
+_in_memory_lock_lock = threading.Lock()
 
 
 def _get_redis_client():
@@ -185,7 +151,20 @@ def distributed_lock(lock_key: str, ttl_seconds: int = 300, lock_id: Optional[st
     """
     redis_client = _get_redis_client()
     if redis_client is None:
-        yield True
+        now = time.monotonic()
+        with _in_memory_lock_lock:
+            stale = [k for k, v in _in_memory_locks.items() if v < now]
+            for s in stale:
+                del _in_memory_locks[s]
+            if lock_key in _in_memory_locks:
+                yield False
+                return
+            _in_memory_locks[lock_key] = now + ttl_seconds
+        try:
+            yield True
+        finally:
+            with _in_memory_lock_lock:
+                _in_memory_locks.pop(lock_key, None)
         return
 
     acquired = False
