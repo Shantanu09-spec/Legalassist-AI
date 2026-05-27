@@ -45,14 +45,11 @@ class TranscriptionEngine:
             pass
 
         # If provider configured, attempt to call (guarded)
-        if self.provider == "openai" and self.openai_key:
+        if self.provider == "openai":
             try:
-                # Use the OpenAI 'audio.transcriptions' API when available.
-                # This is a best-effort call and may fail in test environments.
-                audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
-                # The actual SDK method may differ; wrap in try/except
-                resp = openai.Audio.transcribe("whisper-1", audio_b64, language=language)
-                text = resp.get("text") if isinstance(resp, dict) else None
+                from core.audio_utils import transcribe_audio
+                # Retrieve the transcribed text via our unified utility
+                text = transcribe_audio(audio_bytes, language=language)
                 if text:
                     return text
             except Exception as e:

@@ -1,5 +1,6 @@
 import io
 import logging
+from typing import Optional
 from gtts import gTTS
 from core.app_utils import LANGUAGE_CODE_TO_NAME
 
@@ -32,7 +33,7 @@ def generate_audio(text: str, language_name: str) -> bytes:
         logging.error(f"Error generating TTS for {language_name}: {e}")
         return None
 
-def transcribe_audio(audio_bytes: bytes, client=None) -> str:
+def transcribe_audio(audio_bytes: bytes, client=None, language: Optional[str] = None) -> str:
     """
     Transcribe Speech-to-Text audio bytes using OpenAI Whisper API.
     Returns the transcribed text.
@@ -53,11 +54,15 @@ def transcribe_audio(audio_bytes: bytes, client=None) -> str:
         file_obj = io.BytesIO(audio_bytes)
         file_obj.name = "audio.wav"
         
-        response = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=file_obj,
-            response_format="text"
-        )
+        kwargs = {
+            "model": "whisper-1",
+            "file": file_obj,
+            "response_format": "text"
+        }
+        if language:
+            kwargs["language"] = language
+            
+        response = client.audio.transcriptions.create(**kwargs)
         return response.strip()
     except Exception as e:
         logging.error(f"Error transcribing audio: {e}")
