@@ -99,7 +99,7 @@ def sanitize_log_value(value: Any, key: Optional[str] = None) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [sanitize_log_value(item, key_name) for item in value]
     if isinstance(value, str):
-        if "@" in value:
+        if EMAIL_PATTERN.search(value):
             value = mask_email(value)
         return sanitize_log_text(value)[:240]
     if hasattr(value, "isoformat"):
