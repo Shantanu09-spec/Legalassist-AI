@@ -148,6 +148,7 @@ def validate_csrf(
         try:
             payload = verify_token(access_token)
             current_user_id = int(payload.get("sub"))
+            request.state.csrf_user_id = current_user_id
         except TokenExpiredError as exc:
             raise StructuredAPIError(status_code=status.HTTP_401_UNAUTHORIZED, error_code="TOKEN_EXPIRED", message=str(exc))
         except (InvalidTokenError, TypeError, ValueError):
