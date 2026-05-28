@@ -194,7 +194,7 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         }
 
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path
+        path = request.url.path.rstrip("/") or "/"
 
         if path in self.exempt_paths:
             return await call_next(request)
