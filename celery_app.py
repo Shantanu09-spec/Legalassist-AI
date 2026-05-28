@@ -1081,7 +1081,7 @@ def export_data_task(
             else:
                 digits = [c for c in recipient if c.isdigit()]
                 if len(digits) >= 7:
-                    return recipient[:3] + "*" * (len(recipient) - 7) + recipient[-4:]
+                    return recipient[:3] + "*" * (len(digits) - 7) + recipient[-4:]
                 else:
                     return "*******"
 
