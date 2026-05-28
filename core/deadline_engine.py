@@ -21,8 +21,26 @@ def _parse_date(value: Any, tz: str) -> datetime:
     return dt
 
 
-def _is_weekend(dt: date) -> bool:
-    return dt.weekday() >= 5
+_JURISDICTION_WEEKENDS = {
+    # Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4, Saturday=5, Sunday=6
+    "US": {5, 6},       # Sat–Sun
+    "NY": {5, 6},
+    "CA": {5, 6},
+    "UK": {5, 6},
+    "IL": {4, 5},       # Fri–Sat (Israel)
+    "IN": {5, 6},       # Sat–Sun (India)
+    "BD": {4, 5},       # Fri–Sat (Bangladesh)
+    "AE": {4, 5},       # Fri–Sat (UAE)
+    "NP": {5, 6},       # Sat–Sun (Nepal)
+    "EG": {4, 5},       # Fri–Sat (Egypt)
+    "SA": {4, 5},       # Fri–Sat (Saudi Arabia)
+    "PK": {5, 6},       # Sat–Sun (Pakistan)
+}
+
+
+def _is_weekend(dt: date, jurisdiction: Optional[str] = None) -> bool:
+    weekend_days = _JURISDICTION_WEEKENDS.get(jurisdiction.upper() if jurisdiction else "", {5, 6})
+    return dt.weekday() in weekend_days
 
 
 def calculate_deadline(
@@ -61,7 +79,7 @@ def calculate_deadline(
         steps += 1
         d = current.date()
 
-        if exclude_weekends and _is_weekend(d):
+        if exclude_weekends and _is_weekend(d, jurisdiction):
             continue
 
         if d.isoformat() in holidays_set:
