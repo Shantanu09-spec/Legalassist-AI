@@ -8,6 +8,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.openapi.utils import get_openapi
 from fastapi import status
+import logging
 import structlog
 
 from api.config import get_settings
@@ -28,7 +29,7 @@ from api.validation import (
 )
 
 # Import routes
-from api.routes import documents, cases, reports, analytics, deadlines, auth, health, case_search, speech, document_verification, argument_strength, deadline_engine, efiling
+from api.routes import documents, cases, reports, analytics, deadlines, auth, health, case_search, speech, document_verification, argument_strength, deadline_engine, efiling, notifications as notifications_webhooks, anonymized_cases
 
 settings = get_settings()
 logger = structlog.get_logger(__name__)
@@ -38,10 +39,21 @@ logger = structlog.get_logger(__name__)
 # Middleware Configuration
 # ============================================================================
 
+# Force explicit origins when credentials are enabled — never allow *
+_origins = settings.CORS_ORIGINS
+if isinstance(_origins, list) and "*" in _origins:
+    sanitized = [o for o in _origins if o != "*"]
+    logging.getLogger(__name__).warning(
+        "Removed wildcard '*' from CORS_ORIGINS because allow_credentials=True. "
+        "Explicit origins required: %s",
+        sanitized or None,
+    )
+    _origins = sanitized or ["http://localhost:8080"]
+
 middleware = [
     Middleware(
         CORSMiddleware,
-        allow_origins=settings.CORS_ORIGINS,
+        allow_origins=_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -98,6 +110,8 @@ def create_app() -> FastAPI:
     app.include_router(argument_strength.router)
     app.include_router(deadline_engine.router)
     app.include_router(efiling.router)
+    app.include_router(notifications_webhooks.router)
+    app.include_router(anonymized_cases.router)
     # Model feedback & optimization
     from api.routes import models as models_router
     app.include_router(models_router.router)
