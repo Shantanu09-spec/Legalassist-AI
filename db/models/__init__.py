@@ -1,5 +1,5 @@
 from .notifications import NotificationStatus, NotificationChannel, NotificationLog, NotificationTemplate, UserPreference
-from .scheduler import SchedulerRun
+from .scheduler import SchedulerRun, SchedulerJobStatus
 from .cases import CaseDeadline, Case, CaseDocument, Attachment, CaseTimeline, CaseNote, CaseNoteVersion, AnonymizedShareToken, CaseStatus, DocumentType
 from .auth import User, OTPVerification, APIKey, APIKey
 from .audit import AuditEvent
@@ -65,5 +65,6 @@ __all__ = [
     "KnowledgeInvalidation",
     "KnowledgeInvalidationStatus",
     "SchedulerRun",
+    "SchedulerJobStatus",
 ]
 

@@ -20,8 +20,6 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
-    JSON,
-    Session,
     UniqueConstraint,
     create_engine,
     make_url,
@@ -184,7 +182,7 @@ from db.models.cases import (
     CaseComment, CasePresence,
 )
 from db.models.notifications import (
-    NotificationStatus, NotificationChannel, UserPreference, NotificationTemplate, NotificationLog,
+    NotificationStatus, NotificationChannel, UserPreference, NotificationTemplate,
 )
 from db.models.feedback import UserFeedback
 from db.models.reports import Report
@@ -284,12 +282,14 @@ class NotificationLog(Base):
     __tablename__ = "notification_logs"
     __table_args__ = (
         UniqueConstraint("deadline_id", "days_before", "channel", name="uq_notification_deadline_days_channel"),
+        {"extend_existing": True},
     )
     id = Column(Integer, primary_key=True)
     deadline_id = Column(Integer, ForeignKey("case_deadlines.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     channel = Column(SQLEnum(NotificationChannel), nullable=False)
     status = Column(SQLEnum(NotificationStatus), default=NotificationStatus.PENDING, index=True)
+    attempted_channels = Column(JSON, nullable=True)
     recipient = Column(String(255), nullable=False)  # phone or email
     days_before = Column(Integer, nullable=False)  # 30, 10, 3, or 1 day reminder
     message_id = Column(String(255), nullable=True)  # From Twilio or SendGrid
@@ -1467,6 +1467,8 @@ def update_notification_result(
     message_id: Optional[str] = None,
     error_message: Optional[str] = None,
     message_preview: Optional[str] = None,
+    recipient: Optional[str] = None,
+    attempted_channels: Optional[List[str]] = None,
 ) -> NotificationLog:
     """Update an existing notification log if present, otherwise create one.
 
@@ -1480,6 +1482,10 @@ def update_notification_result(
 
     if existing:
         existing.status = status
+        if recipient is not None:
+            existing.recipient = recipient
+        if attempted_channels is not None:
+            existing.attempted_channels = attempted_channels
         existing.message_id = message_id or existing.message_id
         existing.error_message = error_message or existing.error_message
         existing.message_preview = message_preview or existing.message_preview
@@ -1490,21 +1496,18 @@ def update_notification_result(
         db.refresh(existing)
         return existing
 
-    # Not found - create a new log record
     return log_notification(
         db=db,
         deadline_id=deadline_id,
         user_id=user_id,
         channel=channel,
-        recipient="unknown",
+        recipient=recipient or "unknown",
         days_before=days_before,
         status=status,
         message_id=message_id,
         error_message=error_message,
         message_preview=message_preview,
     )
-
-
 def get_notification_history(db: Session, user_id: int, limit: int = 50) -> List[NotificationLog]:
     """Get notification history for a user"""
     return db.query(NotificationLog).filter(
