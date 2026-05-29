@@ -29,6 +29,7 @@ CSRF_TOKEN_HEADER = "X-CSRF-Token"
 CSRF_COOKIE_NAME = "csrf_token"
 ACCESS_TOKEN_COOKIE_NAME = "access_token"
 CSRF_SESSION_PREFIX = "csrf_session:"
+CSRF_TOKEN_V2_PREFIX = "v2:"
 
 
 class CSRFError(StructuredAPIError):
