@@ -1,6 +1,6 @@
 import datetime as dt
 import enum
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey, Enum as SQLEnum, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey, Enum as SQLEnum, Index, UniqueConstraint, JSON
 from sqlalchemy.orm import relationship
 from db.base import Base
 
@@ -66,6 +66,7 @@ class NotificationLog(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     channel = Column(SQLEnum(NotificationChannel), nullable=False)
     status = Column(SQLEnum(NotificationStatus), default=NotificationStatus.PENDING, index=True)
+    attempted_channels = Column(JSON, nullable=True)
     recipient = Column(String(255), nullable=False)
     days_before = Column(Integer, nullable=False)
     message_id = Column(String(255), nullable=True)

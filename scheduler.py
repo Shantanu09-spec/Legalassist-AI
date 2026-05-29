@@ -194,7 +194,7 @@ def _shutdown_scheduler_instance(scheduler, *, wait: bool = True):
 def _send_deadline_reminders_safe(db, deadline, user_preference, days_left):
     """Send reminders for one deadline and isolate notification service failures."""
     try:
-        return notification_service.send_reminders(db, deadline, user_preference, days_left)
+        return [notification_service.send_with_fallback(db, deadline, user_preference, days_left)]
     except Exception as exc:
         logger.error(
             "scheduler_notification_dispatch_failed",
