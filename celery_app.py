@@ -129,6 +129,22 @@ settings = get_settings()
 logger = structlog.get_logger(__name__)
 initialize_observability_for_environment()
 
+# Ensure Celery instrumentation and HTTP instrumentation are active in workers
+try:
+    from opentelemetry.instrumentation.celery import CeleryInstrumentor
+    from opentelemetry.instrumentation.requests import RequestsInstrumentor
+    try:
+        CeleryInstrumentor().instrument()
+    except Exception:
+        pass
+    try:
+        RequestsInstrumentor().instrument()
+    except Exception:
+        pass
+except Exception:
+    # If opentelemetry not available, skip instrumentation silently
+    pass
+
 
 def build_task_context_headers(
     request_id: Optional[str] = None,
