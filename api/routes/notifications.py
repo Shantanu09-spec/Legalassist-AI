@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from urllib.parse import parse_qsl
 
+
+
 import structlog
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
@@ -68,6 +70,14 @@ def _verify_sendgrid_signature(request: Request, payload: str) -> bool:
     timestamp = request.headers.get(timestamp_header)
     if not signature or not timestamp:
         raise StructuredAPIError(status_code=status.HTTP_401_UNAUTHORIZED, error_code="SENDGRID_SIGNATURE_MISSING", message="Missing SendGrid signature headers")
+
+    import time
+    try:
+        ts = int(timestamp)
+    except ValueError:
+        raise StructuredAPIError(status_code=status.HTTP_401_UNAUTHORIZED, error_code="SENDGRID_WEBHOOK_INVALID_TIMESTAMP", message="Invalid SendGrid webhook timestamp")
+    if abs(time.time() - ts) > 300:
+        raise StructuredAPIError(status_code=status.HTTP_401_UNAUTHORIZED, error_code="SENDGRID_WEBHOOK_EXPIRED", message="SendGrid webhook timestamp is too old, possible replay attack")
 
     public_key = Config.get_sendgrid_event_webhook_public_key()
     if not public_key:
