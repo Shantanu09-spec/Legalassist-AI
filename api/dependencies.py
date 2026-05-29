@@ -72,11 +72,11 @@ def get_db_rls(
     try:
         if _is_postgres:
             user_id_str = str(current_user.user_id)
-            if user_id_str.isdigit():
-                apply_rls_context(db, int(user_id_str))
+            if user_id_str:
+                apply_rls_context(db, user_id_str)
             else:
                 logger.warning(
-                    "rls_skipped_non_numeric_user_id",
+                    "rls_skipped_empty_user_id",
                     user_id=user_id_str,
                 )
         yield db
