@@ -95,6 +95,7 @@ def get_referer(request: Request) -> Optional[str]:
 
 def is_same_origin(request: Request, allowed_hosts: Optional[Set[str]] = None) -> bool:
     origin = get_origin(request)
+    expected_scheme = request.url.scheme
     if not origin:
         referer = get_referer(request)
         if referer:
@@ -102,6 +103,8 @@ def is_same_origin(request: Request, allowed_hosts: Optional[Set[str]] = None) -
             parsed = urlparse(referer)
             allowed = allowed_hosts or set()
             host = request.headers.get("host", "").split(":")[0]
+            if parsed.scheme != expected_scheme:
+                return False
             if parsed.hostname in allowed or parsed.hostname == host:
                 return True
             return parsed.hostname == host
@@ -110,6 +113,8 @@ def is_same_origin(request: Request, allowed_hosts: Optional[Set[str]] = None) -
     parsed = urlparse(origin)
     host = request.headers.get("host", "").split(":")[0]
     allowed = allowed_hosts or set()
+    if parsed.scheme != expected_scheme:
+        return False
     if parsed.hostname in allowed:
         return True
     return parsed.hostname == host
@@ -194,7 +199,7 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         }
 
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path
+        path = request.url.path.rstrip("/") or "/"
 
         if path in self.exempt_paths:
             return await call_next(request)
@@ -216,7 +221,15 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         access_token = request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)
         csrf_cookie = request.cookies.get(CSRF_COOKIE_NAME)
 
-        if request.method in SAFE_METHODS and not csrf_cookie:
+        if request.method in SAFE_METHODS and (not csrf_cookie or access_token):
+            if user_id is None and access_token:
+                try:
+                    from api.jwt_auth import verify_token
+                    payload = verify_token(access_token)
+                    user_id = int(payload.get("sub", 0))
+                    request.state.csrf_user_id = user_id
+                except Exception:
+                    user_id = 0
             session_id = secrets.token_urlsafe(16)
             token = generate_csrf_token(int(user_id) if str(user_id).isdigit() else 0, session_id)
             response.set_cookie(

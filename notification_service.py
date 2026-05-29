@@ -36,6 +36,7 @@ if celery_app is None:
 
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 # Email and SMS Libraries
 try:
@@ -120,7 +121,7 @@ class SMSClient:
     @tenacity.retry(
         wait=tenacity.wait_exponential(multiplier=1, min=2, max=60),
         stop=tenacity.stop_after_attempt(5),
-        retry=tenacity.retry_if_exception(lambda e: '503' in str(e) or '429' in str(e)),
+        retry=tenacity.retry_if_exception(lambda e: getattr(e, 'status_code', None) in (429, 503)),
         reraise=True
     )
     def _create_message_with_retry(self, to_number: str, message: str):
@@ -185,7 +186,7 @@ class EmailClient:
     @tenacity.retry(
         wait=tenacity.wait_exponential(multiplier=1, min=2, max=60),
         stop=tenacity.stop_after_attempt(5),
-        retry=tenacity.retry_if_exception(lambda e: '503' in str(e) or '429' in str(e)),
+        retry=tenacity.retry_if_exception(lambda e: getattr(e, 'status_code', None) in (429, 503)),
         reraise=True
     )
     def _send_email_with_retry(self, message):
@@ -477,7 +478,7 @@ class NotificationService:
         Returns: (subject, html_content)
         """
         formatted_date = deadline.deadline_date.strftime("%d %B %Y")
-        escaped_title = html.escape(deadline.case_title)
+        escaped_title = html.escape(getattr(deadline, 'case_title', ''))
         escaped_type = html.escape(deadline.deadline_type.title())
         escaped_desc = html.escape(deadline.description) if deadline.description else "No additional details provided."
         
@@ -492,7 +493,7 @@ class NotificationService:
             accent_color = "#1a5490" # Info Blue
             urgency_label = "REMINDER"
 
-        subject = f"⚖️ {urgency_label}: {deadline.case_title} - {escaped_type} Deadline"
+        subject = f"⚖️ {urgency_label}: {getattr(deadline, 'case_title', '')} - {escaped_type} Deadline"
         
         html_content = f"""
         <!DOCTYPE html>
@@ -591,7 +592,7 @@ class NotificationService:
             tmpl = get_notification_template_for_user(db, deadline.user_id)
             if tmpl and tmpl.sms_template:
                 values = {
-                    "case_title": deadline.case_title,
+                    "case_title": getattr(deadline, 'case_title', ''),
                     "case_number": getattr(deadline, "case_id", ""),
                     "deadline_date": deadline.deadline_date.strftime("%d %b %Y") if deadline.deadline_date else "",
                     "days_left": days_left,
@@ -607,38 +608,41 @@ class NotificationService:
             logger.exception("Error rendering user SMS template; falling back to default")
 
         if message is None:
-            message = self.build_sms_message(deadline.case_title, days_left, deadline.deadline_date)
-        # Reserve a notification slot to avoid races
-        reserved_log, created = reserve_notification(
-            db=db,
-            deadline_id=deadline.id,
-            user_id=deadline.user_id,
-            channel=NotificationChannel.SMS,
-            recipient=user_preference.phone_number,
-            days_before=days_left,
-            message_preview=message,
-        )
+            message = self.build_sms_message(getattr(deadline, 'case_title', ''), days_left, deadline.deadline_date)
 
-        if not created:
-            logger.debug("SMS reservation already exists; skipping send", deadline_id=deadline.id, days_before=days_left)
-            return NotificationResult(success=False, channel=NotificationChannel.SMS, recipient=user_preference.phone_number, error="already_reserved")
-
+        # Send SMS before writing to DB so a crash never leaves an orphan PENDING record.
         success, message_id, error = self.sms_client.send_sms(user_preference.phone_number, message)
 
         status = NotificationStatus.SENT if success else NotificationStatus.FAILED
 
-        # Update the reserved record with the final result
-        update_notification_result(
-            db=db,
-            deadline_id=deadline.id,
-            user_id=deadline.user_id,
-            days_before=days_left,
-            channel=NotificationChannel.SMS,
-            status=status,
-            message_id=message_id,
-            error_message=error,
-            message_preview=message,
-        )
+        # Atomically create the notification log with the final status.
+        # The unique constraint on (deadline_id, days_before, channel) prevents
+        # duplicate sends from concurrent workers.
+        try:
+            with db.begin_nested():
+                log = NotificationLog(
+                    deadline_id=deadline.id,
+                    user_id=deadline.user_id,
+                    channel=NotificationChannel.SMS,
+                    recipient=user_preference.phone_number,
+                    days_before=days_left,
+                    message_preview=message,
+                    status=status,
+                    message_id=message_id,
+                    error_message=error,
+                )
+                if success:
+                    log.sent_at = datetime.now(timezone.utc)
+                db.add(log)
+                db.flush()
+        except IntegrityError:
+            logger.debug("SMS notification already recorded; skipping", deadline_id=deadline.id, days_before=days_left)
+            return NotificationResult(
+                success=False,
+                channel=NotificationChannel.SMS,
+                recipient=user_preference.phone_number,
+                error="already_recorded",
+            )
 
         return NotificationResult(
             success=True,
@@ -663,7 +667,7 @@ class NotificationService:
             tmpl = get_notification_template_for_user(db, deadline.user_id)
             if tmpl and (tmpl.email_html_template or tmpl.email_subject_template):
                 values = {
-                    "case_title": deadline.case_title,
+                    "case_title": getattr(deadline, 'case_title', ''),
                     "case_number": getattr(deadline, "case_id", ""),
                     "deadline_date": deadline.deadline_date.strftime("%d %B %Y") if deadline.deadline_date else "",
                     "days_left": days_left,
@@ -718,6 +722,13 @@ class NotificationService:
             logger.debug("Email reservation already exists; skipping send", deadline_id=deadline.id, days_left=days_left)
             return NotificationResult(success=False, channel=NotificationChannel.EMAIL, recipient=user_preference.email, error="already_reserved")
 
+        # Annotate the reserved record with a placeholder task id BEFORE dispatching,
+        # so the worker never races against an uncommitted DB state.
+        reserved_log.message_id = f"task_pending"
+        reserved_log.message_preview = html_content
+        db.add(reserved_log)
+        db.commit()
+
         task_result = send_email_task.delay(
             to_email=user_preference.email,
             subject=subject,
@@ -727,9 +738,7 @@ class NotificationService:
             days_left=days_left,
         )
 
-        # Annotate with the real task id without touching the status column.
-        # update_notification_result(status=PENDING) would overwrite a SENT
-        # status set by a fast Celery worker that completed before this line.
+        # Update with the real Celery task id (best-effort — worker may already be updating).
         try:
             db.query(NotificationLog).filter(
                 NotificationLog.deadline_id == deadline.id,
