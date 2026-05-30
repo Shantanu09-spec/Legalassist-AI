@@ -29,6 +29,7 @@ from api.validation import (
     ValidationError,
     PayloadTooLargeError,
 )
+from database import init_db
 
 # Import routes
 from api.routes import documents, cases, reports, analytics, deadlines, auth, health, case_search, speech, document_verification, argument_strength, deadline_engine, efiling, notifications as notifications_webhooks, anonymized_cases
@@ -184,6 +185,7 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def startup_event():
         """Initialize on startup"""
+        init_db()
         initialize_observability_for_environment()
         # Attempt to instrument FastAPI with OpenTelemetry (if available)
         try:
