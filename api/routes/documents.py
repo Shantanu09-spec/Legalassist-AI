@@ -9,8 +9,11 @@ from pathlib import Path
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends
 from fastapi import Request
+from sqlalchemy.orm import Session
 from api.models import DocumentAnalysisRequest, DocumentAnalysisSummary, AnalysisJobResponse
 from api.auth import get_current_user, CurrentUser
+from api.dependencies import get_db_rls
+from db.models.cases import Attachment
 
 try:
     from celery_app import analyze_document_task, TaskStatus, enqueue_task_from_http_request
@@ -86,7 +89,8 @@ def validate_file_path(file_path: str) -> str:
 async def analyze_document(
     request: DocumentAnalysisRequest,
     http_request: Request,
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db_rls),
 ) -> AnalysisJobResponse:
     """
     Analyze a legal document asynchronously
@@ -117,6 +121,18 @@ async def analyze_document(
 
     # Path traversal prevention: canonicalize and restrict file_path
     safe_path = validate_file_path(request.file_path) if request.file_path else None
+    
+    # Ownership verification: the user must own an Attachment record for this path
+    if safe_path:
+        attachment = db.query(Attachment).filter(
+            Attachment.stored_path == safe_path,
+            Attachment.user_id == int(current_user.user_id),
+        ).first()
+        if not attachment:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to access this file",
+            )
     
     # Generate document ID and job ID
     document_id = str(uuid.uuid4())
