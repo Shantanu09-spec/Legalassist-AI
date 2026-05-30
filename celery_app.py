@@ -577,6 +577,17 @@ def analyze_document_task(
                 else:
                     extracted_text = response.content.decode("utf-8", errors="ignore")
             elif file_path:
+                # Ownership verification: the user must own an Attachment for this path
+                session = SessionLocal()
+                try:
+                    owned = session.query(Attachment).filter(
+                        Attachment.stored_path == file_path,
+                        Attachment.user_id == int(user_id),
+                    ).first()
+                    if not owned:
+                        raise ValueError("You do not have permission to access this file")
+                finally:
+                    session.close()
                 if os.path.getsize(file_path) > ValidationConfig.MAX_TEXT_LENGTH:
                     raise ValueError(f"File too large: {os.path.getsize(file_path)} bytes exceeds limit of {ValidationConfig.MAX_TEXT_LENGTH} bytes.")
                 if file_path.lower().endswith(".pdf"):
